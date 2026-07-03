@@ -55,6 +55,12 @@ export interface RingCentralClientOptions {
   now?: () => number
   /** safety margin: refresh this many ms before access_token expiry */
   refreshMarginMs?: number
+  /**
+   * Called whenever the token set changes (exchange, refresh, revoke, explicit
+   * set). Lets the main process re-persist tokens to the encrypted store after
+   * a REST-driven refresh, so a crash doesn't revert to a stale token.
+   */
+  onTokensChanged?: (tokens: TokenSet | null) => void
 }
 
 /** Result of the PKCE authorize URL build. */
@@ -145,6 +151,7 @@ export class RingCentralClient implements IMessagingClient {
 
   setTokens(tokens: TokenSet | null): void {
     this.tokens = tokens
+    this.opts.onTokensChanged?.(tokens)
   }
 
   getTokens(): TokenSet | null {
@@ -205,8 +212,9 @@ export class RingCentralClient implements IMessagingClient {
       body.set('client_secret', this.opts.clientSecret)
     }
     const refreshed = await this.executeAuth(body)
-    // Persist the refreshed set so subsequent REST calls use the new token.
-    this.tokens = refreshed
+    // Persist via setTokens so the onTokensChanged hook re-persists to the
+    // encrypted store (a REST-driven refresh should survive a crash).
+    this.setTokens(refreshed)
     return refreshed
   }
 
@@ -223,7 +231,7 @@ export class RingCentralClient implements IMessagingClient {
     try {
       await this.executeAuth(body, '/restapi/oauth/revoke')
     } finally {
-      this.tokens = null
+      this.setTokens(null)
     }
   }
 

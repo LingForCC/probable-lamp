@@ -5,7 +5,8 @@
 
 import type {
   IMessagingClient,
-  RealtimeSubscription
+  RealtimeSubscription,
+  TokenSet
 } from '../types.js'
 import { MockMessagingClient, type MockOptions } from './mock/mockClient.js'
 import {
@@ -35,6 +36,8 @@ export interface ClientFactoryOptions {
   sha256?: Sha256
   /** fetch override (tests). Defaults to global fetch. */
   fetch?: typeof fetch
+  /** Called whenever the real client's token set changes (re-persist to store). */
+  onTokensChanged?: (tokens: TokenSet | null) => void
   mockOptions?: MockOptions
 }
 
@@ -57,7 +60,8 @@ export function createClients(opts: ClientFactoryOptions): ClientFactoryResult {
     redirectUri: opts.redirectUri,
     limiter: opts.limiter,
     sha256: opts.sha256,
-    fetch: opts.fetch
+    fetch: opts.fetch,
+    onTokensChanged: opts.onTokensChanged
   })
 
   const realtime = new RingCentralSocket({

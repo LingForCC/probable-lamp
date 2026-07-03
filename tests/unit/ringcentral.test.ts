@@ -5,6 +5,7 @@ import {
   RingCentralError,
   SERVER_URLS
 } from '../../src/shared/client/ringcentral'
+import type { TokenSet } from '../../src/shared/types'
 import { RateLimiterRegistry } from '../../src/shared/client/rateLimiter'
 
 interface MockResponse {
@@ -159,6 +160,34 @@ describe('RingCentralClient auth', () => {
     expect(refreshed.access_token).toBe('newAT')
     expect(env.requests[0].body).toContain('grant_type=refresh_token')
     expect(env.requests[0].body).toContain('refresh_token=rt')
+  })
+
+  it('fires onTokensChanged when tokens are set, refreshed, or revoked', async () => {
+    const seen: Array<TokenSet | null> = []
+    const limiter = new RateLimiterRegistry({ now: () => NOW, schedule: (fn) => fn() })
+    const client = new RingCentralClient({
+      server: 'sandbox',
+      clientId: 'cid',
+      redirectUri: 'http://localhost/cb',
+      fetch: (vi.fn(async () => makeResponse({ status: 200, json: {} })) as unknown) as typeof fetch,
+      sha256: async (b) => b,
+      limiter,
+      now: () => NOW,
+      onTokensChanged: (t) => seen.push(t)
+    })
+    const tokens: TokenSet = {
+      access_token: 'A',
+      refresh_token: 'R',
+      token_type: 'bearer',
+      expires_in: 3600,
+      refresh_token_expires_in: 604800,
+      obtainedAt: NOW
+    }
+    client.setTokens(tokens)
+    expect(seen).toEqual([tokens])
+    // revoke → null
+    await client.revokeToken()
+    expect(seen[seen.length - 1]).toBeNull()
   })
 })
 

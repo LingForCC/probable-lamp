@@ -187,11 +187,15 @@ export class IpcController {
     })
   }
 
-  /** Forward realtime envelopes to the focused window and fire notifications. */
+  /** Forward realtime envelopes + typing events to windows and fire notifications. */
   private startRealtimeForwarding(): void {
     this.deps.realtime.onRealtime((envelope: RealtimeEnvelope) => {
       this.broadcast(IPC.REALTIME_EVENT, envelope)
       this.maybeNotify(envelope)
+    })
+    // Forward typing indicators to the renderer so the UI can show "X is typing…".
+    this.deps.realtime.onTyping((payload) => {
+      this.broadcast(IPC.TYPING_EVENT, payload)
     })
   }
 

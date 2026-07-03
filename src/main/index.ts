@@ -50,7 +50,12 @@ app.whenReady().then(async () => {
     redirectUri: resolvedConfig.redirectUri ?? '',
     limiter,
     sha256: nodeSha256,
-    createSocket: (url) => new globalThis.WebSocket(url) as unknown as never
+    createSocket: (url) => new globalThis.WebSocket(url) as unknown as never,
+    // Re-persist tokens whenever the REST client refreshes them, so a crash
+    // never reverts to a stale (possibly expired) token.
+    onTokensChanged: (tokens) => {
+      if (!isMock) store.saveTokens(tokens)
+    }
   })
 
   // Restore tokens on startup.
