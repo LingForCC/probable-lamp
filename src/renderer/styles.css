@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Allow selecting text inside messages */
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Thin, dark-friendly scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Rendered markdown */
+.md-body p {
+  margin: 0 0 0.4rem;
+}
+.md-body p:last-child {
+  margin-bottom: 0;
+}
+.md-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(148, 163, 184, 0.18);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.85em;
+}
+.md-body pre {
+  background: rgba(2, 6, 23, 0.6);
+  padding: 0.6rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+  margin: 0.3rem 0;
+}
+.md-body pre code {
+  background: transparent;
+  padding: 0;
+}
+.md-body a {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0.2rem 0 0.4rem 1.2rem;
+}
+.md-body blockquote {
+  border-left: 3px solid rgba(148, 163, 184, 0.4);
+  padding-left: 0.6rem;
+  color: rgb(148, 163, 184);
+}
+.md-mention {
+  background: rgba(244, 63, 115, 0.18);
+  color: #fda4bb;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-weight: 500;
+}

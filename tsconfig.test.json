@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node", "vitest/globals"],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  },
+  "include": [
+    "tests/unit/**/*.ts",
+    "tests/unit/**/*.tsx",
+    "tests/e2e/**/*.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ]
+}
