@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "\"${ZCODE_PROJECT_DIR}/.zcode/scripts/verify-on-stop.sh\"",
+              "timeout": 120,
+              "statusMessage": "Running typecheck + lint"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
