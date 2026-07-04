@@ -31,7 +31,7 @@ export interface RcmApi {
    * counts locally without trusting the server's `unreadCount`.
    */
   getReadStates: () => Promise<Record<string, string>>
-  listChats: () => Promise<PageResult<GlipChat>>
+  listRecentChats: () => Promise<PageResult<GlipChat>>
   listTeams: () => Promise<GlipTeam[]>
   getTeam: (chatId: string) => Promise<GlipTeam>
   createTeam: (args: { name: string; members?: string[]; description?: string }) => Promise<GlipTeam>

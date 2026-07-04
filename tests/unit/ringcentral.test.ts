@@ -192,25 +192,24 @@ describe('RingCentralClient REST', () => {
     expect(env.requests[0].headers.Authorization).toBe('Bearer AT')
   })
 
-  it('listChats parses records + nextPageToken (navigation)', async () => {
+  it('listRecentChats parses records (recent endpoint has no navigation token)', async () => {
     const env = authedClient()
-    env.enqueue('/glip/chats', {
+    env.enqueue('/team-messaging/v1/recent/chats', {
       status: 200,
       json: {
-        records: [{ id: 'c1', type: 'Team', name: 'Eng' }],
-        navigation: { nextPageToken: 'page2' }
+        records: [{ id: 'c1', type: 'Team', name: 'Eng' }]
       }
     })
-    const res = await env.client.listChats()
+    const res = await env.client.listRecentChats()
     expect(res.records).toHaveLength(1)
     expect(res.records[0].name).toBe('Eng')
-    expect(res.nextPageToken).toBe('page2')
+    expect(res.nextPageToken).toBeUndefined()
     expect(env.requests[0].url).toContain('recordCount=250')
   })
 
-  it('listPosts hits /glip/chats/{id}/posts with recordCount + pageToken', async () => {
+  it('listPosts hits /team-messaging/v1/chats/{id}/posts with recordCount + pageToken', async () => {
     const env = authedClient()
-    env.enqueue('/glip/chats/c1/posts', {
+    env.enqueue('/team-messaging/v1/chats/c1/posts', {
       status: 200,
       json: {
         records: [{ id: 'p1', groupId: 'c1', text: 'hi' }],
@@ -220,14 +219,14 @@ describe('RingCentralClient REST', () => {
     const res = await env.client.listPosts('c1', { recordCount: 25, pageToken: 'abc' })
     expect(res.records[0].id).toBe('p1')
     expect(res.nextPageToken).toBe('tok')
-    expect(env.requests[0].url).toContain('/glip/chats/c1/posts')
+    expect(env.requests[0].url).toContain('/team-messaging/v1/chats/c1/posts')
     expect(env.requests[0].url).toContain('recordCount=25')
     expect(env.requests[0].url).toContain('pageToken=abc')
   })
 
   it('sendPost POSTs text + mentions + attachments', async () => {
     const env = authedClient()
-    env.enqueue('/glip/chats/c1/posts', {
+    env.enqueue('/team-messaging/v1/chats/c1/posts', {
       status: 200,
       json: { id: 'p9', groupId: 'c1', text: 'hello', creationTime: 't' }
     })
@@ -251,13 +250,13 @@ describe('RingCentralClient REST', () => {
     expect(edited.text).toBe('edited')
     await env.client.deletePost('c1', 'p1')
     expect(env.requests[0].method).toBe('PUT')
-    expect(env.requests[0].url).toContain('/glip/chats/c1/posts/p1')
+    expect(env.requests[0].url).toContain('/team-messaging/v1/chats/c1/posts/p1')
     expect(env.requests[1].method).toBe('DELETE')
   })
 
   it('searchPosts uses searchText query param', async () => {
     const env = authedClient()
-    env.enqueue('/glip/posts', {
+    env.enqueue('/team-messaging/v1/posts', {
       status: 200,
       json: { records: [{ id: 'x', text: 'needle' }] }
     })
@@ -266,12 +265,12 @@ describe('RingCentralClient REST', () => {
     expect(env.requests[0].url).toContain('searchText=needle')
   })
 
-  it('markChatRead POSTs to /glip/chats/{id}/read', async () => {
+  it('markChatRead POSTs to /team-messaging/v1/chats/{id}/read', async () => {
     const env = authedClient()
-    env.enqueue('/glip/chats/c1/read', { status: 204, json: '' })
+    env.enqueue('/team-messaging/v1/chats/c1/read', { status: 204, json: '' })
     await env.client.markChatRead('c1')
     expect(env.requests[0].method).toBe('POST')
-    expect(env.requests[0].url).toContain('/glip/chats/c1/read')
+    expect(env.requests[0].url).toContain('/team-messaging/v1/chats/c1/read')
   })
 
   it('retries once on 429 then succeeds', async () => {

@@ -11,7 +11,7 @@ Show "X is typing…" in the chat header so users know a teammate is composing a
 > client-side by the mock backend's `emitTyping`. Against the real RingCentral API,
 > typing is a **one-way** signal you send to the server; the inbound event you'd
 > render here comes through the same WebSocket subscription as messages (event filter
-> `/glip/typing`).
+> `/team-messaging/typing`).
 
 ## Outbound: when you type
 
@@ -21,7 +21,7 @@ Show "X is typing…" in the chat header so users know a teammate is composing a
    2. if now - lastTyping.current > 3000ms (3s throttle) AND activeChatId set:
         lastTyping.current = now
         store.setTyping(api, activeChatId)
-           └─IPC set:typing──► client.setTyping(chatId) ─POST /glip/chats/{id}/typing
+           └─IPC set:typing──► client.setTyping(chatId) ─POST /team-messaging/v1/chats/{id}/typing
 ```
 
 - **Throttled to once per 3 seconds** per typing session (`lastTyping` ref) to avoid
@@ -67,6 +67,6 @@ store.applyTyping({ chatId, personId, personName })                  (appStore.t
 - `src/renderer/store/appStore.ts` — `setTyping` (outbound) + `applyTyping` (inbound,
   4s auto-clear).
 - `src/renderer/components/ChatView.tsx` — indicator rendering.
-- `src/shared/client/websocket.ts` — typing event routing (`/glip/typing`).
+- `src/shared/client/websocket.ts` — typing event routing (`/team-messaging/typing`).
 - `src/main/ipc.ts` — `onTyping` → broadcast `push:typing-event`.
 - `src/shared/client/mock/mockClient.ts` — `emitTyping` (test helper).

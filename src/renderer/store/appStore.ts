@@ -113,7 +113,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const [config, auth] = await Promise.all([api.getConfig(), api.getAuthState()])
       set({ config: { ...config, theme: (config as { theme?: 'light' | 'dark' | 'system' }).theme } })
       if (auth.status === 'loggedIn') {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
+        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
         const people = collectPeople(chatsResp.records)
         const readStates = await api.getReadStates()
         set({
@@ -140,7 +140,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const auth = await api.login()
       set({ auth })
       if (auth.status === 'loggedIn') {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
+        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
         const readStates = await api.getReadStates()
         const apiMode = get().config?.apiMode
         set({
@@ -208,7 +208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   async refreshChats(api) {
     try {
-      const resp = await api.listChats()
+      const resp = await api.listRecentChats()
       set((state) => {
         // Preserve existing unread entries; default unseen chats to 0.
         const unread: Record<string, number> = {}
@@ -441,7 +441,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (state.status === 'loggedIn') {
       set({ auth: state })
       try {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
+        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
         const readStates = await api.getReadStates()
         const apiMode = get().config?.apiMode
         set({

@@ -95,7 +95,7 @@ export class IpcController {
 
     ipcMain.handle(IPC.GET_READ_STATES, () => store.getReadStates())
 
-    ipcMain.handle(IPC.LIST_CHATS, () => client.listChats())
+    ipcMain.handle(IPC.LIST_RECENT_CHATS, () => client.listRecentChats())
     ipcMain.handle(IPC.LIST_TEAMS, () => client.listTeams())
     ipcMain.handle(IPC.GET_TEAM, (_e, chatId: string) => client.getTeam(chatId))
     ipcMain.handle(

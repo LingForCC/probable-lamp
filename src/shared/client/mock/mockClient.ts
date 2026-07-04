@@ -225,7 +225,7 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
     return this.state.me
   }
 
-  async listChats(): Promise<PageResult<GlipChat>> {
+  async listRecentChats(): Promise<PageResult<GlipChat>> {
     const records = Array.from(this.state.chats.values())
     records.sort((a, b) =>
       (b.lastModifiedTime ?? '').localeCompare(a.lastModifiedTime ?? '')
@@ -390,7 +390,7 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
   /** Emit a post-added event for a post that already exists in state. */
   private emitPostAdded(p: GlipPost): void {
     const envelope: RealtimeEnvelope = {
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       timestamp: new Date(this.now()).toISOString(),
       body: { ...p, eventType: 'PostAdded' }
     }

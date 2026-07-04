@@ -242,7 +242,7 @@ export class RingCentralClient implements IMessagingClient {
     opts: { query?: Record<string, string | number | undefined>; body?: unknown } = {}
   ): Promise<T> {
     await this.opts.limiter.waitFor('medium')
-    const url = `${this.baseUrl}${path.startsWith('/restapi') ? path : '/restapi/v1.0' + path}${query(opts.query ?? {})}`
+    const url = `${this.baseUrl}${path.startsWith('/restapi') || path.startsWith('/team-messaging') ? path : '/restapi/v1.0' + path}${query(opts.query ?? {})}`
     const res = await this.fetcher(url, {
       method,
       headers: {
@@ -269,14 +269,14 @@ export class RingCentralClient implements IMessagingClient {
     return json as T
   }
 
-  // ── Glip endpoints ───────────────────────────────────────────────────────
+  // ── Team Messaging endpoints ─────────────────────────────────────────────
 
   /**
    * Return the current user as a GlipPerson.
    *
-   * RingCentral removed the `/glip/persons/~me` convenience endpoint (it now
-   * 400s with "personId contains invalid value '~me'"). The canonical way to
-   * identify the authenticated user is the Extension endpoint
+   * RingCentral removed the `/team-messaging/v1/persons/~me` convenience endpoint
+   * (it now 400s with "personId contains invalid value '~me'"). The canonical
+   * way to identify the authenticated user is the Extension endpoint
    * `/restapi/v1.0/account/~/extension/~`, whose `id` is the same person id
    * used as Glip posts' `creatorId` (so own-message detection keeps working).
    * We map the extension fields onto GlipPerson here.
@@ -294,26 +294,26 @@ export class RingCentralClient implements IMessagingClient {
     }
   }
 
-  async listChats(): Promise<PageResult<GlipChat>> {
-    const body = await this.rest<unknown>('GET', '/glip/chats', {
+  async listRecentChats(): Promise<PageResult<GlipChat>> {
+    const body = await this.rest<unknown>('GET', '/team-messaging/v1/recent/chats', {
       query: { recordCount: 250 }
     })
     return { records: records<GlipChat>(body), nextPageToken: parseNextPageToken(body) }
   }
 
   async listTeams(): Promise<GlipTeam[]> {
-    const body = await this.rest<unknown>('GET', '/glip/teams', {
+    const body = await this.rest<unknown>('GET', '/team-messaging/v1/teams', {
       query: { recordCount: 250 }
     })
     return records<GlipTeam>(body)
   }
 
   async getTeam(chatId: string): Promise<GlipTeam> {
-    return this.rest<GlipTeam>('GET', `/glip/teams/${encodeURIComponent(chatId)}`)
+    return this.rest<GlipTeam>('GET', `/team-messaging/v1/teams/${encodeURIComponent(chatId)}`)
   }
 
   async createTeam(name: string, members: string[] = [], description?: string): Promise<GlipTeam> {
-    return this.rest<GlipTeam>('POST', '/glip/teams', {
+    return this.rest<GlipTeam>('POST', '/team-messaging/v1/teams', {
       body: { name, description, members: [...members] }
     })
   }
@@ -324,7 +324,7 @@ export class RingCentralClient implements IMessagingClient {
   ): Promise<PageResult<GlipPost>> {
     const body = await this.rest<unknown>(
       'GET',
-      `/glip/chats/${encodeURIComponent(chatId)}/posts`,
+      `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`,
       { query: { recordCount: opts.recordCount ?? 50, pageToken: opts.pageToken } }
     )
     return { records: records<GlipPost>(body), nextPageToken: parseNextPageToken(body) }
@@ -335,7 +335,7 @@ export class RingCentralClient implements IMessagingClient {
     text: string,
     opts: { mentions?: GlipMention[]; attachments?: GlipAttachment[] } = {}
   ): Promise<GlipPost> {
-    return this.rest<GlipPost>('POST', `/glip/chats/${encodeURIComponent(chatId)}/posts`, {
+    return this.rest<GlipPost>('POST', `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`, {
       body: { text, mentions: opts.mentions ?? [], attachments: opts.attachments ?? [] }
     })
   }
@@ -343,7 +343,7 @@ export class RingCentralClient implements IMessagingClient {
   async editPost(chatId: string, postId: string, text: string): Promise<GlipPost> {
     return this.rest<GlipPost>(
       'PUT',
-      `/glip/chats/${encodeURIComponent(chatId)}/posts/${encodeURIComponent(postId)}`,
+      `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts/${encodeURIComponent(postId)}`,
       { body: { text } }
     )
   }
@@ -351,7 +351,7 @@ export class RingCentralClient implements IMessagingClient {
   async deletePost(chatId: string, postId: string): Promise<void> {
     await this.rest<void>(
       'DELETE',
-      `/glip/chats/${encodeURIComponent(chatId)}/posts/${encodeURIComponent(postId)}`
+      `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts/${encodeURIComponent(postId)}`
     )
   }
 
@@ -360,7 +360,7 @@ export class RingCentralClient implements IMessagingClient {
     file: { name: string; type: string; data: Uint8Array }
   ): Promise<GlipAttachment> {
     await this.opts.limiter.waitFor('medium')
-    const url = `${this.baseUrl}/restapi/v1.0/glip/files${query({ groupId: chatId })}`
+    const url = `${this.baseUrl}/team-messaging/v1/files${query({ groupId: chatId })}`
     const form = createMultipart(file)
     const res = await this.fetcher(url, {
       method: 'POST',
@@ -378,18 +378,18 @@ export class RingCentralClient implements IMessagingClient {
   }
 
   async searchPosts(text: string): Promise<GlipPost[]> {
-    const body = await this.rest<unknown>('GET', '/glip/posts', {
+    const body = await this.rest<unknown>('GET', '/team-messaging/v1/posts', {
       query: { searchText: text, recordCount: 50 }
     })
     return records<GlipPost>(body)
   }
 
   async markChatRead(chatId: string): Promise<void> {
-    await this.rest<void>('POST', `/glip/chats/${encodeURIComponent(chatId)}/read`)
+    await this.rest<void>('POST', `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/read`)
   }
 
   async setTyping(chatId: string): Promise<void> {
-    await this.rest<void>('POST', `/glip/chats/${encodeURIComponent(chatId)}/typing`)
+    await this.rest<void>('POST', `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/typing`)
   }
 }
 

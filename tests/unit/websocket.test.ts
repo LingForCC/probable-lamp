@@ -88,14 +88,14 @@ describe('RingCentralSocket', () => {
       clearTimeout: () => {},
       pingIntervalMs: 999_999,
       staleAfterMs: 999_999,
-      eventFilters: ['/restapi/v1.0/glip/posts']
+      eventFilters: ['/restapi/v1.0/team-messaging/posts']
     })
     await sock.start()
     fake.open()
     expect(fake.sent).toHaveLength(1)
     const msg = JSON.parse(fake.sent[0])
     expect(msg.message.type).toBe('Subscribe')
-    expect(msg.message.eventFilters).toContain('/restapi/v1.0/glip/posts')
+    expect(msg.message.eventFilters).toContain('/restapi/v1.0/team-messaging/posts')
     expect(msg.message.deliveryMode.transportType).toBe('WebSocket')
     await sock.stop()
   })
@@ -119,14 +119,14 @@ describe('RingCentralSocket', () => {
 
     fake.deliver(
       JSON.stringify({
-        event: '/restapi/v1.0/glip/posts',
+        event: '/restapi/v1.0/team-messaging/posts',
         sequenceId: 42,
         body: { eventType: 'PostAdded', id: 'p1', groupId: 'c1', text: 'hi', creatorId: 'u' }
       })
     )
     fake.deliver(
       JSON.stringify({
-        event: '/restapi/v1.0/glip/posts',
+        event: '/restapi/v1.0/team-messaging/posts',
         sequenceId: 43,
         body: { eventType: 'PostAdded', id: 'p2', groupId: 'c1', text: 'yo', creatorId: 'u' }
       })
@@ -215,7 +215,7 @@ describe('RingCentralSocket', () => {
     // Push a notification so sequenceId advances.
     sockets[0].deliver(
       JSON.stringify({
-        event: '/restapi/v1.0/glip/posts',
+        event: '/restapi/v1.0/team-messaging/posts',
         sequenceId: 77,
         body: { eventType: 'PostAdded', id: 'x', groupId: 'c', text: 'a', creatorId: 'u' }
       })
@@ -349,7 +349,7 @@ describe('RingCentralSocket', () => {
       clearTimeout: () => {},
       pingIntervalMs: 999_999,
       staleAfterMs: 999_999,
-      eventFilters: ['/restapi/v1.0/glip/typing']
+      eventFilters: ['/restapi/v1.0/team-messaging/typing']
     })
     const seen = vi.fn()
     sock.onTyping(seen)
@@ -357,7 +357,7 @@ describe('RingCentralSocket', () => {
     fake.open()
     fake.deliver(
       JSON.stringify({
-        event: '/restapi/v1.0/glip/typing',
+        event: '/restapi/v1.0/team-messaging/typing',
         body: { chatId: 'c1', personId: 'u1', personName: 'Alice' }
       })
     )

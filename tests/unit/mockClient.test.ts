@@ -5,7 +5,7 @@ import type { RealtimeEnvelope } from '../../src/shared/types'
 describe('MockMessagingClient', () => {
   it('seeds chats, teams, and posts', async () => {
     const c = new MockMessagingClient({ autoReplyMs: 0 })
-    const chats = await c.listChats()
+    const chats = await c.listRecentChats()
     expect(chats.records.length).toBeGreaterThan(0)
     const teams = await c.listTeams()
     expect(teams.length).toBeGreaterThan(0)
@@ -29,7 +29,7 @@ describe('MockMessagingClient', () => {
     expect(sent.creatorId).toBe('me')
     const after = (await c.listPosts('team-general')).records.length
     expect(after).toBe(before + 1)
-    const chats = await c.listChats()
+    const chats = await c.listRecentChats()
     const eng = chats.records.find((x) => x.id === 'team-general')!
     expect(eng.lastMessage).toBe('hello team')
   })
@@ -87,9 +87,9 @@ describe('MockMessagingClient', () => {
     expect(after).toBe(before + 1)
   })
 
-  it('listChats records carry no unreadCount (unread is a renderer concern)', async () => {
+  it('listRecentChats records carry no unreadCount (unread is a renderer concern)', async () => {
     const c = new MockMessagingClient({ autoReplyMs: 0 })
-    const chats = await c.listChats()
+    const chats = await c.listRecentChats()
     for (const chat of chats.records) {
       expect((chat as { unreadCount?: number }).unreadCount).toBeUndefined()
     }

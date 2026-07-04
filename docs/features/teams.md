@@ -9,9 +9,9 @@ List existing teams and create new named teams.
 ## Listing
 
 Teams are a special kind of chat (`type: 'Team'`) and are included in the general
-chat list (see [conversations.md](conversations.md)). `GET /glip/teams` is available
+chat list (see [conversations.md](conversations.md)). `GET /team-messaging/v1/teams` is available
 for an explicit teams list (`IPC.LIST_TEAMS` / `client.listTeams`), and a single team
-can be fetched via `GET /glip/teams/{chatId}` (`getTeam`).
+can be fetched via `GET /team-messaging/v1/teams/{chatId}` (`getTeam`).
 
 ## Creating a team
 
@@ -21,7 +21,7 @@ can be fetched via `GET /glip/teams/{chatId}` (`getTeam`).
    [Create team]
      1. validate name non-empty (else show inline error)
      2. window.rcm.createTeam({ name, members?, description? })
-        ─IPC create:team──► client.createTeam ─POST /glip/teams { name, description, members }
+        ─IPC create:team──► client.createTeam ─POST /team-messaging/v1/teams { name, description, members }
      3. on success: store.refreshChats(api)   (so the new team appears in the sidebar)
      4. close modal
      on error: show inline error, keep modal open

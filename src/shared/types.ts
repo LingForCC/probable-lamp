@@ -154,7 +154,7 @@ export const IPC = {
   GET_AUTH_STATE: 'auth:get-state',
   GET_ME: 'rc:get-me',
   GET_READ_STATES: 'app:get-read-states',
-  LIST_CHATS: 'rc:list-chats',
+  LIST_RECENT_CHATS: 'rc:list-recent-chats',
   LIST_TEAMS: 'rc:list-teams',
   CREATE_TEAM: 'rc:create-team',
   GET_TEAM: 'rc:get-team',
@@ -204,7 +204,7 @@ export interface IMessagingClient {
   getTokens(): TokenSet | null
 
   getMe(): Promise<GlipPerson>
-  listChats(): Promise<PageResult<GlipChat>>
+  listRecentChats(): Promise<PageResult<GlipChat>>
   listTeams(): Promise<GlipTeam[]>
   getTeam(chatId: string): Promise<GlipTeam>
   createTeam(name: string, members?: string[], description?: string): Promise<GlipTeam>

@@ -76,8 +76,8 @@ export function createFakeApi(opts: {
       record('getReadStates', [])
       return { ...(opts.readStates ?? {}) }
     },
-    listChats: async (): Promise<PageResult<GlipChat>> => {
-      record('listChats', [])
+    listRecentChats: async (): Promise<PageResult<GlipChat>> => {
+      record('listRecentChats', [])
       return { records: opts.chats }
     },
     listTeams: async (): Promise<GlipTeam[]> => {

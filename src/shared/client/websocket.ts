@@ -154,8 +154,8 @@ export class RingCentralSocket implements RealtimeSubscription {
     this.setTimeoutFn = opts.setTimeout ?? ((fn, ms) => setTimeout(fn, ms))
     this.clearTimeoutFn = opts.clearTimeout ?? ((h) => clearTimeout(h as number | undefined))
     this.eventFilters = opts.eventFilters ?? [
-      '/restapi/v1.0/glip/posts',
-      '/restapi/v1.0/glip/chats'
+      '/restapi/v1.0/team-messaging/posts',
+      '/restapi/v1.0/team-messaging/chats'
     ]
     this.pingIntervalMs = opts.pingIntervalMs ?? 30_000
     this.staleAfterMs = opts.staleAfterMs ?? 90_000
@@ -289,7 +289,7 @@ export class RingCentralSocket implements RealtimeSubscription {
       }
 
       // Typing events use a dedicated event filter when available.
-      if (parsed.event.includes('/glip/typing') || parsed.event.includes('/typing')) {
+      if (parsed.event.includes('/team-messaging/typing') || parsed.event.includes('/typing')) {
         const body = parsed.body as Record<string, unknown>
         for (const l of this.typingListeners) {
           l({

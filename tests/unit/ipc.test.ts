@@ -50,7 +50,7 @@ function makeClient(overrides: Partial<IMessagingClient> = {}): IMessagingClient
     setTokens: () => {},
     getTokens: () => null,
     getMe: async () => ({ id: 'me', firstName: 'Me' }),
-    listChats: async () => ({ records: [] }),
+    listRecentChats: async () => ({ records: [] }),
     listTeams: async () => [],
     getTeam: async () => ({ id: 't', type: 'Team' }),
     createTeam: async () => ({ id: 't', type: 'Team' }),
@@ -235,7 +235,7 @@ describe('IpcController realtime forwarding', () => {
     ]
     const deps = makeDeps()
     IpcController.create(deps)
-    const envelope = { event: '/glip/posts', body: { eventType: 'PostAdded' } }
+    const envelope = { event: '/restapi/v1.0/team-messaging/posts', body: { eventType: 'PostAdded' } }
     deps.realtime.realtimeCb!(envelope)
     expect(sent.some((s) => s.channel === IPC.REALTIME_EVENT && s.payload === envelope)).toBe(true)
   })

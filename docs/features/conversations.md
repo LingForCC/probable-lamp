@@ -9,7 +9,7 @@ see unread state, and filter by name.
 
 ## Data source
 
-`GET /glip/chats?recordCount=250` once after login (`store.doLogin` → `listChats`).
+`GET /team-messaging/v1/recent/chats?recordCount=250` once after login (`store.doLogin` → `listRecentChats`). The "recent" endpoint returns only chats the user is a member of, sorted by `lastModifiedTime` descending (matching the sidebar), and is Light-throttled.
 Each `GlipChat` has a `type` (`Personal` | `Group` | `Team` | `Direct` | `Everyone`),
 an optional `name`, the other `person` for direct chats, a `lastMessage` preview,
 `lastModifiedTime`, and `membersCount`. (The server also returns an `unreadCount`
@@ -79,7 +79,7 @@ click chat row ─► store.selectChat(api, chatId)                      (appSto
    1. set activeChatId
    2. if messages already loaded → markChatRead locally (clear unread, advance
       watermark) + server best-effort; return
-   3. else GET /glip/chats/{id}/posts (first page)
+   3. else GET /team-messaging/v1/chats/{id}/posts (first page)
    4. markChatRead locally: clear unread[chatId], advance lastReadTime[chatId]
       to the newest visible message, and call api.markChatRead (which the IPC
       layer also persists to the read-state store)
@@ -128,5 +128,5 @@ reconcile path.
 - `src/main/ipc.ts` — `notifyRealtimeReconnected` (debounced `REALTIME_RECONCILED`).
 - `src/main/index.ts` — `powerMonitor.on('resume')` + socket `onReconnect` wiring.
 - `src/shared/client/websocket.ts` — `onReconnect` option, `forceReconnect()`.
-- `src/shared/client/ringcentral.ts` — `listChats`, `markChatRead`.
+- `src/shared/client/ringcentral.ts` — `listRecentChats`, `markChatRead`.
 - `src/shared/client/mock/mockClient.ts` — seeded chats.

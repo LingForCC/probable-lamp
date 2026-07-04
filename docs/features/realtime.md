@@ -19,7 +19,7 @@ after login: IpcController ─► realtime.start()
       4. start keepalive (ping every 30s) + stale check
 ```
 
-- **Event filters**: `/restapi/v1.0/glip/posts` and `/glip/chats` by default.
+- **Event filters**: `/restapi/v1.0/team-messaging/posts` and `/restapi/v1.0/team-messaging/chats` by default.
 - **Keepalive**: a `Pong` message every `pingIntervalMs` (30s); a stale check force
   -reconnects if nothing arrives within `staleAfterMs` (90s).
 
@@ -66,7 +66,7 @@ WS onmessage ─► RingCentralSocket.handleMessage                       (webso
    2. JSON.parse (ignore unparseable)
    3. ack (SubscriptionConfirmation/Update/Error) → resolve pending acks; return
    4. Pong / ping keepalive → return
-   5. typing event (/glip/typing) → dispatch to typingListeners; return
+   5. typing event (/team-messaging/typing) → dispatch to typingListeners; return
    6. else → dispatch to realtimeListeners
 ```
 

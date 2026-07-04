@@ -91,7 +91,7 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
 ```
 [Composer] ─Enter─► store.sendText
    1. insert OPTIMISTIC post (pending=true, localId)
-   2. window.rcm.sendPost ─IPC─► IpcController ─► client.sendPost ─POST /glip/chats/{id}/posts
+   2. window.rcm.sendPost ─IPC─► IpcController ─► client.sendPost ─POST /team-messaging/v1/chats/{id}/posts
    3. on 200: replace localId → server post (pending=false)
 
    meanwhile, the server pushes a PostAdded event:

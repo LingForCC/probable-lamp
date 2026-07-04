@@ -25,7 +25,7 @@ store.runSearch                                                          (appSto
    1. if query blank → clear search results; return
    2. set search = { query, results: [], loading: true }
    3. window.rcm.searchPosts(query)
-      ─IPC search:posts──► client.searchPosts ─GET /glip/posts?searchText=<q>&recordCount=50
+      ─IPC search:posts──► client.searchPosts ─GET /team-messaging/v1/posts?searchText=<q>&recordCount=50
    4. set search = { query, results, loading: false }
    on error: clear loading, show toast
 ```

@@ -120,7 +120,7 @@ describe('appStore send/edit/delete + realtime', () => {
     await useAppStore.getState().doLogin(api)
     await useAppStore.getState().selectChat(api, 'c1')
     const env: RealtimeEnvelope = {
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: {
         eventType: 'PostAdded',
         id: 'rt1',
@@ -144,7 +144,7 @@ describe('appStore send/edit/delete + realtime', () => {
     await useAppStore.getState().doLogin(api)
     await useAppStore.getState().selectChat(api, 'c1')
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: { eventType: 'PostUpdated', id: 'p1', groupId: 'c1', text: 'edited!', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }
     })
     expect(useAppStore.getState().messages['c1']!.posts[0].text).toBe('edited!')
@@ -159,7 +159,7 @@ describe('appStore send/edit/delete + realtime', () => {
     await useAppStore.getState().doLogin(api)
     await useAppStore.getState().selectChat(api, 'c1')
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: { eventType: 'PostRemoved', id: 'p1', groupId: 'c1' }
     })
     expect(useAppStore.getState().messages['c1']!.posts).toHaveLength(0)
@@ -200,7 +200,7 @@ describe('appStore send/edit/delete + realtime', () => {
     // Simulate the server also pushing the same id.
     const id = useAppStore.getState().messages['c1']!.posts[0].id
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: { eventType: 'PostAdded', id, groupId: 'c1', text: 'hello', creatorId: 'me', creationTime: new Date().toISOString() }
     })
     expect(useAppStore.getState().messages['c1']!.posts.length).toBe(countBefore)
@@ -211,7 +211,7 @@ describe('appStore send/edit/delete + realtime', () => {
     await useAppStore.getState().doLogin(api)
     // Do NOT select c2.
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: { eventType: 'PostAdded', id: 'z1', groupId: 'c2', text: 'ping', creatorId: 'u1', creationTime: new Date().toISOString() }
     })
     const s = useAppStore.getState()
@@ -375,7 +375,7 @@ describe('appStore unread reconciliation (local watermark)', () => {
     // active chat. Use a timestamp strictly newer than `before`.
     const liveAt = new Date(Date.now() + 60_000).toISOString()
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: {
         eventType: 'PostAdded',
         id: 'rt1',
@@ -397,7 +397,7 @@ describe('appStore unread reconciliation (local watermark)', () => {
     await useAppStore.getState().doLogin(api)
     // c2 is inactive; an own-authored message arrives there.
     useAppStore.getState().applyRealtime({
-      event: '/restapi/v1.0/glip/posts',
+      event: '/restapi/v1.0/team-messaging/posts',
       body: { eventType: 'PostAdded', id: 'own1', groupId: 'c2', text: 'mine', creatorId: 'me', creationTime: new Date().toISOString() }
     })
     expect(useAppStore.getState().unread['c2'] ?? 0).toBe(0)

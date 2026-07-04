@@ -28,7 +28,7 @@ network**, then drop in a RingCentral JWT to use it against the live API.
   and exponential-backoff reconnect. New messages update the UI live and fire
   desktop notifications.
 - **Teams**: list and create teams.
-- **Attachments**: file upload via `POST /glip/files` (rendered as chips/cards).
+- **Attachments**: file upload via `POST /team-messaging/v1/files` (rendered as chips/cards).
 - **Search** across messages.
 - **Settings**: light/dark/system theme, sandbox/production server, MOCK toggle,
   log out.
