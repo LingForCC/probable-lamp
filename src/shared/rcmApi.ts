@@ -25,6 +25,12 @@ export interface RcmApi {
   logout: () => Promise<AuthState>
   getAuthState: () => Promise<AuthState>
   getMe: () => Promise<GlipPerson>
+  /**
+   * Persisted per-chat read-state watermarks (chatId -> ISO timestamp of the
+   * newest message the user has seen). Used by the renderer to compute unread
+   * counts locally without trusting the server's `unreadCount`.
+   */
+  getReadStates: () => Promise<Record<string, string>>
   listChats: () => Promise<PageResult<GlipChat>>
   listTeams: () => Promise<GlipTeam[]>
   getTeam: (chatId: string) => Promise<GlipTeam>
@@ -56,5 +62,11 @@ export interface RcmApi {
 
   onAuthStateChanged: (cb: (state: AuthState) => void) => () => void
   onRealtimeEvent: (cb: (env: RealtimeEnvelope) => void) => () => void
+  /**
+   * Fired when the realtime socket has reconnected after a drop (or the system
+   * resumed from sleep), meaning realtime events may have been missed and the
+   * renderer should re-run its unread reconciliation from the watermark.
+   */
+  onRealtimeReconciled: (cb: () => void) => () => void
   onTypingEvent: (cb: (p: TypingPayload) => void) => () => void
 }

@@ -77,6 +77,11 @@ export interface RingCentralSocketOptions {
   reconnectBaseMs?: number
   /** Max reconnect backoff. */
   reconnectMaxMs?: number
+  /**
+   * Called when the socket reconnects after a drop (NOT on the initial
+   * connect). Used to trigger a missed-event reconcile in the renderer.
+   */
+  onReconnect?: () => void
 }
 
 /** Subscribe/Unsubscribe message envelope sent over the socket. */
@@ -123,6 +128,8 @@ export class RingCentralSocket implements RealtimeSubscription {
   private reconnectTimer: unknown = null
   private attempts = 0
   private stopped = true
+  /** True after the first successful connect, so we can detect reconnects. */
+  private hasConnectedBefore = false
   private pendingAckResolvers: Array<(ack: SubscriptionAck) => void> = []
 
   private readonly gateway: string
@@ -136,6 +143,7 @@ export class RingCentralSocket implements RealtimeSubscription {
   private readonly staleAfterMs: number
   private readonly reconnectBaseMs: number
   private readonly reconnectMaxMs: number
+  private readonly onReconnect?: () => void
 
   constructor(opts: RingCentralSocketOptions) {
     this.gateway = opts.gateway ?? WS_GATEWAY
@@ -153,6 +161,7 @@ export class RingCentralSocket implements RealtimeSubscription {
     this.staleAfterMs = opts.staleAfterMs ?? 90_000
     this.reconnectBaseMs = opts.reconnectBaseMs ?? 1_000
     this.reconnectMaxMs = opts.reconnectMaxMs ?? 30_000
+    this.onReconnect = opts.onReconnect
     this.lastMessageAt = this.now()
   }
 
@@ -184,10 +193,31 @@ export class RingCentralSocket implements RealtimeSubscription {
       }
     }
     this.socket = null
+    // Reset so the next start()'s first connect is treated as initial, not a
+    // reconnect.
+    this.hasConnectedBefore = false
   }
 
   isRunning(): boolean {
     return !this.stopped
+  }
+
+  /**
+   * Force the socket to close and reconnect immediately. Used on system wake
+   * (where timers didn't tick during sleep, so the stale watchdog can't fire
+   * promptly). No-op if stopped or no socket. The existing onclose → reconnect
+   * path handles the actual reconnect; onReconnect fires once it reopens.
+   */
+  forceReconnect(): void {
+    if (this.stopped) return
+    const s = this.socket
+    if (!s || s.readyState >= READY_STATE.CLOSING) return
+    this.clearTimers()
+    try {
+      s.close(4000, 'forced')
+    } catch {
+      /* ignore */
+    }
   }
 
   // ── connection lifecycle ─────────────────────────────────────────────────
@@ -208,6 +238,11 @@ export class RingCentralSocket implements RealtimeSubscription {
     this.socket = socket
 
     socket.onopen = () => {
+      // A reconnect is any successful open after the first one. Fire the
+      // callback before re-subscribing so listeners can prepare; the missed-
+      // event reconcile it triggers is debounced in main regardless.
+      const wasReconnect = this.hasConnectedBefore
+      this.hasConnectedBefore = true
       this.attempts = 0
       this.lastMessageAt = this.now()
       this.sendSubscribe().catch(() => {
@@ -215,6 +250,7 @@ export class RingCentralSocket implements RealtimeSubscription {
       })
       this.schedulePing()
       this.scheduleStaleCheck()
+      if (wasReconnect) this.onReconnect?.()
     }
 
     socket.onmessage = (ev) => this.handleMessage(ev.data)

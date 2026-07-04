@@ -98,7 +98,7 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
 [WS gateway] ─► RingCentralSocket.handleMessage
    ─► listeners ─► IpcController.startRealtimeForwarding
         ├─ broadcast(IPC.REALTIME_EVENT, env) ─► preload ─► window.rcm.onRealtimeEvent
-        │       └─► store.applyRealtime (dedup by id, append, bump unread if not active)
+        │       └─► store.applyRealtime (dedup by id, append, bump unread map if not active; advance lastReadTime watermark if active)
         └─ maybeNotify → desktop Notification (only if PostAdded, not own, window not focused, not seen)
 ```
 
@@ -120,10 +120,22 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
 5. **MOCK-first.** The app boots into MOCK mode with no `.env`, so it's demoable and
    fully testable offline. Real mode activates only when `RC_API_MODE=real` **and**
    `RC_CLIENT_ID` are set.
+6. **Local unread counts.** The server's per-chat `unreadCount` is ignored. Unread is
+   computed client-side from a persisted per-chat `lastReadTime` watermark
+   (`AppStore.readStates`): a message is unread iff newer than the watermark and not
+   the user's own. On a cold start, chats with activity since the watermark page back
+   through recent history (page size 500) to reconcile accurate counts; during a
+   session, realtime `PostAdded` events bump the count (or advance the watermark for
+   the active chat). The same reconcile re-runs after a realtime interruption — on
+   `powerMonitor`'s `resume` (machine wake) the socket is force-reconnected, and on
+   any socket reconnect an `onReconnect` hook fires; both feed a debounced
+   `REALTIME_RECONCILED` push that triggers `store.reconcileUnread`. This keeps unread
+   correct across restarts, sleeps, and network drops with no reliance on the server
+   value.
 
 ## Testing strategy
 
-- **Unit (Vitest, 102 tests)** — `pkce` (incl. the RFC 7636 S256 vector), `rateLimiter`,
+- **Unit (Vitest, 124 tests)** — `pkce` (incl. the RFC 7636 S256 vector), `rateLimiter`,
   the REST client (auth/refresh/pagination/429/proactive-refresh/endpoints), the WS
   client (subscribe/dispatch/sequenceId/reconnect/session-recovery), the mock client,
   `notifications`, the renderer `appStore`, the `MessageItem` component, and utils.

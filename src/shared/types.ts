@@ -33,8 +33,6 @@ export interface GlipChat {
   lastModifiedTime?: string
   /** number of members */
   membersCount?: number
-  /** unread message count */
-  unreadCount?: number
   /** avatar / icon URL */
   avatar?: string
   /** for direct chats, the other person */
@@ -157,6 +155,7 @@ export const IPC = {
   LOGOUT: 'auth:logout',
   GET_AUTH_STATE: 'auth:get-state',
   GET_ME: 'rc:get-me',
+  GET_READ_STATES: 'app:get-read-states',
   LIST_CHATS: 'rc:list-chats',
   LIST_TEAMS: 'rc:list-teams',
   CREATE_TEAM: 'rc:create-team',
@@ -175,6 +174,7 @@ export const IPC = {
   // Main -> Renderer (push)
   AUTH_STATE_CHANGED: 'push:auth-state',
   REALTIME_EVENT: 'push:realtime-event',
+  REALTIME_RECONCILED: 'push:realtime-reconciled',
   TYPING_EVENT: 'push:typing-event'
 } as const
 

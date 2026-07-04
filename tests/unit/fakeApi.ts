@@ -22,6 +22,8 @@ export function createFakeApi(opts: {
   chats: GlipChat[]
   me: GlipPerson
   posts?: Record<string, GlipPost[]>
+  /** Injected read-state watermarks (chatId -> ISO). Defaults to empty. */
+  readStates?: Record<string, string>
 }): RcmApi & {
   emit: (env: RealtimeEnvelope) => void
   emitTyping: (p: TypingPayload) => void
@@ -40,6 +42,7 @@ export function createFakeApi(opts: {
 
   const realtimeCbs = new Set<(env: RealtimeEnvelope) => void>()
   const typingCbs = new Set<(p: TypingPayload) => void>()
+  const reconcileCbs = new Set<() => void>()
   const authCbs = new Set<(s: AuthState) => void>()
 
   const api = {
@@ -70,6 +73,10 @@ export function createFakeApi(opts: {
     getMe: async (): Promise<GlipPerson> => {
       record('getMe', [])
       return opts.me
+    },
+    getReadStates: async (): Promise<Record<string, string>> => {
+      record('getReadStates', [])
+      return { ...(opts.readStates ?? {}) }
     },
     listChats: async (): Promise<PageResult<GlipChat>> => {
       record('listChats', [])
@@ -170,6 +177,10 @@ export function createFakeApi(opts: {
     onRealtimeEvent: (cb: (env: RealtimeEnvelope) => void): (() => void) => {
       realtimeCbs.add(cb)
       return () => realtimeCbs.delete(cb)
+    },
+    onRealtimeReconciled: (cb: () => void): (() => void) => {
+      reconcileCbs.add(cb)
+      return () => reconcileCbs.delete(cb)
     },
     onTypingEvent: (cb: (p: TypingPayload) => void): (() => void) => {
       typingCbs.add(cb)

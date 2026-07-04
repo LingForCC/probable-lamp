@@ -87,12 +87,12 @@ describe('MockMessagingClient', () => {
     expect(after).toBe(before + 1)
   })
 
-  it('markChatRead clears the unread count', async () => {
+  it('listChats records carry no unreadCount (unread is a renderer concern)', async () => {
     const c = new MockMessagingClient({ autoReplyMs: 0 })
-    await c.markChatRead('team-general')
     const chats = await c.listChats()
-    const eng = chats.records.find((x) => x.id === 'team-general')!
-    expect(eng.unreadCount).toBe(0)
+    for (const chat of chats.records) {
+      expect((chat as { unreadCount?: number }).unreadCount).toBeUndefined()
+    }
   })
 
   it('emits a simulated reply via realtime after a send (when running)', async () => {

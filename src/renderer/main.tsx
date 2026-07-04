@@ -9,17 +9,22 @@ function Root() {
   const init = useAppStore((s) => s.init)
   const applyRealtime = useAppStore((s) => s.applyRealtime)
   const applyTyping = useAppStore((s) => s.applyTyping)
+  const reconcileUnread = useAppStore((s) => s.reconcileUnread)
 
   useEffect(() => {
     const api = getRcm()
     void init(api)
     const offRealtime = api.onRealtimeEvent((env) => applyRealtime(env))
     const offTyping = api.onTypingEvent((p) => applyTyping(p))
+    // After a realtime interruption (system wake / socket reconnect), re-run
+    // the unread reconcile to pick up events that were missed.
+    const offReconcile = api.onRealtimeReconciled(() => void reconcileUnread(api))
     return () => {
       offRealtime()
       offTyping()
+      offReconcile()
     }
-  }, [init, applyRealtime, applyTyping])
+  }, [init, applyRealtime, applyTyping, reconcileUnread])
 
   return (
     <StrictMode>

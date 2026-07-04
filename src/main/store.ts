@@ -19,20 +19,33 @@ export interface PersistedState {
   settings: AppSettings
   /** base64 of safeStorage-encrypted TokenSet JSON, or null */
   encryptedTokens: string | null
+  /**
+   * Per-chat read-state watermarks (chatId -> ISO timestamp of the newest
+   * message the user has seen). Plaintext: no secrets, same exposure as the
+   * message previews already shown in the sidebar. Drives local unread counts.
+   */
+  readStates: Record<string, string>
 }
 
 const DEFAULT_STATE: PersistedState = {
   settings: { theme: 'system', server: 'sandbox', apiMode: 'mock' },
-  encryptedTokens: null
+  encryptedTokens: null,
+  readStates: {}
 }
 
 export class AppStore {
   private readonly store: Store<PersistedState>
 
-  constructor() {
+  /**
+   * @param cwd Optional directory for the persisted JSON file. Production leaves
+   * it unset (electron-store's default userData dir); tests inject a temp dir
+   * for isolation.
+   */
+  constructor(cwd?: string) {
     this.store = new Store<PersistedState>({
       name: 'rc-messenger',
-      defaults: DEFAULT_STATE
+      defaults: DEFAULT_STATE,
+      ...(cwd ? { cwd } : {})
     })
   }
 
@@ -85,6 +98,16 @@ export class AppStore {
 
   clearTokens(): void {
     this.store.set('encryptedTokens', null)
+  }
+
+  /** All per-chat read-state watermarks (chatId -> ISO timestamp). */
+  getReadStates(): Record<string, string> {
+    return this.store.get('readStates', DEFAULT_STATE.readStates)
+  }
+
+  /** Persist/overwrite a single chat's read-state watermark. */
+  setReadState(chatId: string, isoTime: string): void {
+    this.store.set(`readStates.${chatId}`, isoTime)
   }
 
   /** Merge persisted settings with a runtime config (env-derived). */

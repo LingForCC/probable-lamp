@@ -42,6 +42,8 @@ export interface IpcDeps {
 
 export class IpcController {
   private me: GlipPerson | null = null
+  /** Debounce timer for REALTIME_RECONCILED broadcasts (coalesce wake + reconnect). */
+  private reconcileTimer: NodeJS.Timeout | null = null
   private constructor(private readonly deps: IpcDeps) {}
 
   static create(deps: IpcDeps): IpcController {
@@ -126,6 +128,8 @@ export class IpcController {
       return this.me
     })
 
+    ipcMain.handle(IPC.GET_READ_STATES, () => store.getReadStates())
+
     ipcMain.handle(IPC.LIST_CHATS, () => client.listChats())
     ipcMain.handle(IPC.LIST_TEAMS, () => client.listTeams())
     ipcMain.handle(IPC.GET_TEAM, (_e, chatId: string) => client.getTeam(chatId))
@@ -174,7 +178,12 @@ export class IpcController {
         })
     )
     ipcMain.handle(IPC.SEARCH_POSTS, (_e, text: string) => client.searchPosts(text))
-    ipcMain.handle(IPC.MARK_CHAT_READ, (_e, chatId: string) => client.markChatRead(chatId))
+    ipcMain.handle(IPC.MARK_CHAT_READ, async (_e, chatId: string) => {
+      // Tell the server the chat was read, AND persist the local read-state
+      // watermark so the next cold start computes unread from "now".
+      await client.markChatRead(chatId)
+      store.setReadState(chatId, new Date().toISOString())
+    })
     ipcMain.handle(IPC.SET_TYPING, (_e, chatId: string) => client.setTyping(chatId))
 
     ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, url: string) => {
@@ -220,5 +229,19 @@ export class IpcController {
   /** Allow main to push typing events to renderer (typed for completeness). */
   forwardTyping(payload: unknown): void {
     this.broadcast(IPC.TYPING_EVENT, payload)
+  }
+
+  /**
+   * Notify the renderer that realtime may have been interrupted (socket
+   * reconnect or system wake), so it should re-reconcile unread counts from
+   * the persisted watermark. Debounced 5s so a wake that also causes a socket
+   * reconnect fires only one reconcile.
+   */
+  notifyRealtimeReconnected(): void {
+    if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
+    this.reconcileTimer = setTimeout(() => {
+      this.reconcileTimer = null
+      this.broadcast(IPC.REALTIME_RECONCILED, undefined)
+    }, 5_000)
   }
 }

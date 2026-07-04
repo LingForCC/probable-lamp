@@ -13,6 +13,7 @@ interface SidebarProps {
 export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
   const chats = useAppStore((s) => s.chats)
   const me = useAppStore((s) => s.me)
+  const unread = useAppStore((s) => s.unread)
   const selectChat = useAppStore((s) => s.selectChat)
   const activeChatId = useAppStore((s) => s.activeChatId)
   const runSearch = useAppStore((s) => s.runSearch)
@@ -25,7 +26,7 @@ export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
     return chats.filter((c) => chatName(c).toLowerCase().includes(f))
   }, [chats, filter])
 
-  const totalUnread = chats.reduce((sum, c) => sum + (c.unreadCount ?? 0), 0)
+  const totalUnread = Object.values(unread).reduce((sum, n) => sum + (n ?? 0), 0)
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-slate-800 bg-slate-900">
@@ -98,6 +99,7 @@ export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
           <ChatRow
             key={chat.id}
             chat={chat}
+            unreadCount={unread[chat.id] ?? 0}
             active={chat.id === activeChatId}
             onClick={() => void selectChat(getRcm(), chat.id)}
           />
@@ -107,9 +109,19 @@ export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
   )
 }
 
-function ChatRow({ chat, active, onClick }: { chat: GlipChat; active: boolean; onClick: () => void }) {
+function ChatRow({
+  chat,
+  unreadCount,
+  active,
+  onClick
+}: {
+  chat: GlipChat
+  unreadCount: number
+  active: boolean
+  onClick: () => void
+}) {
   const name = chatName(chat)
-  const unread = chat.unreadCount ?? 0
+  const unread = unreadCount
   return (
     <button
       data-testid={`chat-row-${chat.id}`}

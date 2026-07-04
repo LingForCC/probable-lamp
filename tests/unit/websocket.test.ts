@@ -230,6 +230,71 @@ describe('RingCentralSocket', () => {
     await sock.stop()
   })
 
+  it('onReconnect fires on a reconnect, NOT on the initial connect', async () => {
+    const clk = virtualClock()
+    const sockets: FakeSocket[] = []
+    let reconnects = 0
+    const sock = new RingCentralSocket({
+      getToken: () => 'AT',
+      createSocket: () => {
+        const s = new FakeSocket()
+        sockets.push(s)
+        return s
+      },
+      now: clk.now,
+      setTimeout: clk.schedule,
+      clearTimeout: () => {},
+      pingIntervalMs: 999_999,
+      staleAfterMs: 999_999,
+      reconnectBaseMs: 1_000,
+      reconnectMaxMs: 1_000,
+      onReconnect: () => {
+        reconnects++
+      }
+    })
+    await sock.start()
+    sockets[0].open() // initial connect — must NOT fire onReconnect
+    expect(reconnects).toBe(0)
+    // Force a reconnect.
+    sockets[0].readyState = READY_STATE.CLOSED
+    sockets[0].onclose?.({})
+    clk.advance(1_500)
+    sockets[1].open() // second connect — IS a reconnect
+    expect(reconnects).toBe(1)
+    await sock.stop()
+  })
+
+  it('forceReconnect closes an open socket and is a no-op when stopped', async () => {
+    const clk = virtualClock()
+    const sockets: FakeSocket[] = []
+    const sock = new RingCentralSocket({
+      getToken: () => 'AT',
+      createSocket: () => {
+        const s = new FakeSocket()
+        sockets.push(s)
+        return s
+      },
+      now: clk.now,
+      setTimeout: clk.schedule,
+      clearTimeout: () => {},
+      pingIntervalMs: 999_999,
+      staleAfterMs: 999_999,
+      reconnectBaseMs: 1_000,
+      reconnectMaxMs: 1_000
+    })
+    await sock.start()
+    sockets[0].open()
+    let closed = false
+    sockets[0].onclose = () => {
+      closed = true
+    }
+    sock.forceReconnect()
+    expect(closed).toBe(true)
+    // After stop, forceReconnect is a no-op (no throw, no reconnect scheduled).
+    await sock.stop()
+    expect(() => sock.forceReconnect()).not.toThrow()
+  })
+
   it('refreshes the token before connecting when getToken returns null', async () => {
     const clk = virtualClock()
     const sockets: FakeSocket[] = []

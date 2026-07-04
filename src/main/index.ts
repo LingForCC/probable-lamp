@@ -4,13 +4,14 @@
  * Boots the app, constructs the messaging client (real or mock based on config),
  * wires up IPC, starts the realtime subscription, and creates the main window.
  */
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, powerMonitor } from 'electron'
 import { loadConfig } from './config.js'
 import { AppStore } from './store.js'
 import { AuthController, openAuthWindow } from './auth.js'
 import { IpcController } from './ipc.js'
 import { createMainWindow } from './window.js'
 import { createClients } from '../shared/client/index.js'
+import type { RingCentralSocket } from '../shared/client/websocket.js'
 import { RateLimiterRegistry } from '../shared/client/rateLimiter.js'
 import { installNodeCrypto, nodeSha256 } from './nodeCrypto.js'
 
@@ -42,6 +43,9 @@ app.whenReady().then(async () => {
   }
 
   const limiter = new RateLimiterRegistry()
+  // Holder so the socket's onReconnect callback (registered during client
+  // construction, before the IpcController exists) can reach the controller.
+  const controllerRef: { current: IpcController | null } = { current: null }
   const { client, realtime, isMock } = createClients({
     apiMode: resolvedConfig.apiMode,
     server: resolvedConfig.server,
@@ -55,7 +59,10 @@ app.whenReady().then(async () => {
     // never reverts to a stale (possibly expired) token.
     onTokensChanged: (tokens) => {
       if (!isMock) store.saveTokens(tokens)
-    }
+    },
+    // On a realtime reconnect, prompt the renderer to re-reconcile unread
+    // (missed PostAdded events during the drop). Real mode only.
+    onReconnect: () => controllerRef.current?.notifyRealtimeReconnected()
   })
 
   // Restore tokens on startup.
@@ -66,7 +73,7 @@ app.whenReady().then(async () => {
 
   const auth = new AuthController({ client, isMock })
 
-  IpcController.create({
+  const ctrl = IpcController.create({
     client,
     realtime,
     store,
@@ -75,6 +82,18 @@ app.whenReady().then(async () => {
     openExternal: openAuthWindow(resolvedConfig.redirectUri ?? ''),
     getFocusedWindow: () => BrowserWindow.getFocusedWindow()
   })
+  controllerRef.current = ctrl
+
+  // On system wake, the realtime socket can sit stale (timers didn't tick
+  // during sleep) and realtime events were missed. Force a reconnect and tell
+  // the renderer to re-reconcile unread from the persisted watermark.
+  if (!isMock) {
+    const socket = realtime as RingCentralSocket
+    powerMonitor.on('resume', () => {
+      socket.forceReconnect()
+      ctrl.notifyRealtimeReconnected()
+    })
+  }
 
   const win = createMainWindow()
   windows.add(win)

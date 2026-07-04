@@ -38,6 +38,11 @@ export interface ClientFactoryOptions {
   fetch?: typeof fetch
   /** Called whenever the real client's token set changes (re-persist to store). */
   onTokensChanged?: (tokens: TokenSet | null) => void
+  /**
+   * Called when the realtime socket reconnects after a drop (not on initial
+   * connect). Used to trigger a missed-event reconcile. Real mode only.
+   */
+  onReconnect?: () => void
   mockOptions?: MockOptions
 }
 
@@ -73,7 +78,8 @@ export function createClients(opts: ClientFactoryOptions): ClientFactoryResult {
       } catch {
         return null
       }
-    }
+    },
+    onReconnect: opts.onReconnect
   })
 
   return { client, realtime, isMock: false }

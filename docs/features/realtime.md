@@ -34,6 +34,30 @@ tracks the highest seen. On the next Subscribe (after reconnect) it includes
 `sessionRecovery: { sequenceId }`, asking the server to replay any events missed
 during the disconnect — so a brief drop doesn't lose messages.
 
+### Reconnect signaling & unread re-reconcile
+
+RC's replay buffer is finite, so for a long disconnect (machine asleep, extended
+network loss) recovery can be silently exhausted and events stay missing. Two
+hooks close that gap by re-triggering the renderer's watermark-based unread
+reconcile (see [conversations.md](conversations.md) § "Unread (local)"):
+
+- **`onReconnect`** — an optional callback on `RingCentralSocketOptions`, fired in
+  `socket.onopen` only when the open is a *reconnect* (not the initial connect,
+  tracked via an internal `hasConnectedBefore` flag). Covers network drops and
+  post-wake reconnects.
+- **`forceReconnect()`** — a public method that closes the current socket with
+  code `4000 'forced'`, letting the existing `onclose → backoff → onopen` path
+  reconnect. Called on `powerMonitor`'s `resume` event because the keepalive
+  timer doesn't tick during sleep, so the stale watchdog can't fire promptly.
+
+Main wires both into `IpcController.notifyRealtimeReconnected()`, which debounces
+5s (a wake that also causes a WS reconnect fires one reconcile, not two) and
+broadcasts `IPC.REALTIME_RECONCILED`. The renderer's `main.tsx` subscribes to it
+and calls `store.reconcileUnread` → `refreshChats` + `reconcileUnreadForAll`. The
+recount is idempotent and only fetches chats with activity newer than the
+watermark, so it's safe to fire speculatively. Only wired in real mode
+(`!isMock`); the mock never reconnects.
+
 ## Handling an inbound envelope
 
 ```
@@ -59,7 +83,7 @@ Realtime listeners are wired in `IpcController.startRealtimeForwarding`
 
 | Event | If chat is loaded | If chat is NOT loaded |
 | --- | --- | --- |
-| **PostAdded** | **Dedup** by `post.id` (skip if already present); else append, enrich `isOwn`, bump chat preview/time, and bump unread (`+1` unless it's the active chat → `0`). | Don't insert the post; just update the chat row's preview/time/unread (`+1`, or `0` if active). |
+| **PostAdded** | **Dedup** by `post.id` (skip if already present); else append, enrich `isOwn`, bump chat preview/time, and update the `unread` map: `+1` for inactive chats, `0` for the active chat (own messages never count). The active chat's `lastReadTime` watermark also advances to the post and is persisted. | Don't insert the post; just update the chat row's preview/time and the `unread` map (`+1`, or `0` if active). |
 | **PostUpdated** | Replace the post in place with the new body. | No-op. |
 | **PostRemoved** | Remove the post by id. | No-op. |
 
@@ -80,8 +104,9 @@ duplicates.
 `MockMessagingClient` *is* its own `RealtimeSubscription` — there's no socket. After
 a `sendPost`, and only while `running`, it schedules a single `PostAdded` reply after
 `autoReplyMs` (default 1500ms), authored by the most recent non-`me` participant in
-that chat, from a canned reply list. It deliberately does **not** bump unread for the
-reply. Tests can drive deterministic replies via the injected `schedule`.
+that chat, from a canned reply list. Unread tracking is a renderer concern (see
+[conversations.md](conversations.md) § "Unread (local)"); the mock no longer bumps or
+tracks unread at all. Tests can drive deterministic replies via the injected `schedule`.
 
 ## Implementation references
 

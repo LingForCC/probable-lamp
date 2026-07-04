@@ -13,8 +13,9 @@ live API.
 - **OAuth Authorization Code + PKCE** login in a secure `BrowserWindow`; access &
   refresh tokens persisted with Electron `safeStorage` (encrypted at rest).
 - **Proactive token refresh** before expiry, plus a `401 → refresh → retry` path.
-- **Conversation sidebar**: teams, groups, direct messages; unread badges,
-  search/filter, avatars, relative timestamps.
+- **Conversation sidebar**: teams, groups, direct messages; unread badges
+  (computed locally via a persisted per-chat read watermark, not the server
+  count), search/filter, avatars, relative timestamps.
 - **Message list**: paginated history (`recordCount`/`pageToken`), infinite
   scroll-up to load older messages, Markdown rendering, RingCentral mention
   syntax (`![:Name](personId)`), message grouping, optimistic send with

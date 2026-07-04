@@ -30,6 +30,7 @@ const api: RcmApi = {
   logout: () => invoke(IPC.LOGOUT),
   getAuthState: () => invoke(IPC.GET_AUTH_STATE),
   getMe: () => invoke(IPC.GET_ME),
+  getReadStates: () => invoke(IPC.GET_READ_STATES),
   listChats: () => invoke(IPC.LIST_CHATS),
   listTeams: () => invoke(IPC.LIST_TEAMS),
   getTeam: (chatId) => invoke(IPC.GET_TEAM, chatId),
@@ -46,6 +47,7 @@ const api: RcmApi = {
   updateSettings: (patch) => invoke(IPC.UPDATE_SETTINGS, patch),
   onAuthStateChanged: (cb) => subscribe(IPC.AUTH_STATE_CHANGED, (s) => cb(s as AuthState)),
   onRealtimeEvent: (cb) => subscribe(IPC.REALTIME_EVENT, (e) => cb(e as RealtimeEnvelope)),
+  onRealtimeReconciled: (cb) => subscribe(IPC.REALTIME_RECONCILED, () => cb()),
   onTypingEvent: (cb) => subscribe(IPC.TYPING_EVENT, (p) => cb(p as TypingPayload))
 }
 

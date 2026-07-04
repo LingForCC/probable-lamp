@@ -7,6 +7,7 @@
  * in tests), keeping the store pure and testable.
  */
 import { create } from 'zustand'
+import type { StoreApi } from 'zustand'
 import type {
   AuthState,
   GlipChat,
@@ -34,6 +35,17 @@ export interface AppState {
   me: GlipPerson | null
   people: Record<string, GlipPerson>
   typing: Record<string, TypingPayload[]> // chatId -> active typers
+  /**
+   * Locally-computed unread counts, keyed by chatId. The single UI-facing
+   * source of unread — never sourced from the server's `unreadCount`.
+   */
+  unread: Record<string, number>
+  /**
+   * In-memory mirror of the persisted read-state watermarks (chatId -> ISO
+   * timestamp of the newest message the user has seen). A message is unread
+   * iff `creationTime > watermark` and it isn't the user's own.
+   */
+  readStates: Record<string, string>
   search: { query: string; results: GlipPost[]; loading: boolean } | null
   loadingChats: boolean
   error: string | null
@@ -44,6 +56,13 @@ export interface AppState {
   doLogout: (api: RcmApi) => Promise<void>
   selectChat: (api: RcmApi, chatId: string) => Promise<void>
   refreshChats: (api: RcmApi) => Promise<void>
+  /**
+   * Reconcile unread counts after a realtime interruption (system wake or
+   * socket reconnect) where PostAdded events may have been missed. Refreshes
+   * the chat list, then re-runs the watermark-based page-back reconcile.
+   * Idempotent and concurrency-capped; safe to call repeatedly.
+   */
+  reconcileUnread: (api: RcmApi) => Promise<void>
   loadMoreMessages: (api: RcmApi) => Promise<void>
   sendText: (api: RcmApi, text: string) => Promise<void>
   setTyping: (api: RcmApi, chatId: string) => Promise<void>
@@ -56,6 +75,17 @@ export interface AppState {
   setError: (msg: string | null) => void
 }
 
+// Most actions receive `api` as an argument (the injected RcmApi), but the
+// realtime push handler `applyRealtime` only gets the envelope. We capture the
+// most recently injected api here so realtime-driven side-effects (persisting
+// the read watermark for the active chat) can call it. Set on init/login.
+let currentApi: RcmApi | null = null
+
+function rememberApi(api: RcmApi): RcmApi {
+  currentApi = api
+  return api
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   config: null,
   auth: { status: 'loggedOut' },
@@ -65,23 +95,30 @@ export const useAppStore = create<AppState>((set, get) => ({
   me: null,
   people: {},
   typing: {},
+  unread: {},
+  readStates: {},
   search: null,
   loadingChats: false,
   error: null,
 
   async init(api) {
+    rememberApi(api)
     try {
       const [config, auth] = await Promise.all([api.getConfig(), api.getAuthState()])
       set({ config: { ...config, theme: (config as { theme?: 'light' | 'dark' | 'system' }).theme } })
       if (auth.status === 'loggedIn') {
         const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
         const people = collectPeople(chatsResp.records)
+        const readStates = await api.getReadStates()
         set({
           auth,
           me: me,
           chats: chatsResp.records,
-          people
+          people,
+          ...seedReadStatesAndUnread(chatsResp.records, readStates, config.apiMode)
         })
+        // Reconcile unread for chats with activity since the persisted watermark.
+        void reconcileUnreadForAll(api, chatsResp.records, get, set)
       } else {
         set({ auth })
       }
@@ -91,17 +128,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   async doLogin(api) {
+    rememberApi(api)
     set({ auth: { status: 'authenticating' }, error: null })
     try {
       const auth = await api.login()
       set({ auth })
       if (auth.status === 'loggedIn') {
         const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
+        const readStates = await api.getReadStates()
+        const apiMode = get().config?.apiMode
         set({
           me,
           chats: chatsResp.records,
-          people: collectPeople(chatsResp.records)
+          people: collectPeople(chatsResp.records),
+          ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
         })
+        void reconcileUnreadForAll(api, chatsResp.records, get, set)
       }
     } catch (e) {
       set({ auth: { status: 'error', message: errMsg(e) }, error: errMsg(e) })
@@ -119,7 +161,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeChatId: null,
         messages: {},
         people: {},
-        typing: {}
+        typing: {},
+        unread: {},
+        readStates: {}
       })
     }
   },
@@ -128,8 +172,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ activeChatId: chatId })
     const existing = get().messages[chatId]
     if (existing && existing.posts.length > 0) {
-      // already loaded; just mark read
-      void api.markChatRead(chatId)
+      // already loaded; just mark read (advances watermark, clears unread)
+      markChatReadLocally(chatId, get, set)
+      void api.markChatRead(chatId).catch(() => {})
       return
     }
     try {
@@ -145,11 +190,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         }
       }))
-      void api.markChatRead(chatId)
-      // clear unread badge for this chat
-      set((state) => ({
-        chats: state.chats.map((c) => (c.id === chatId ? { ...c, unreadCount: 0 } : c))
-      }))
+      // Opening the chat reads it: clear the unread badge, advance the
+      // watermark to the newest visible message, and persist server-side.
+      set((state) => ({ unread: { ...state.unread, [chatId]: 0 } }))
+      markChatReadLocally(chatId, get, set)
+      void api.markChatRead(chatId).catch(() => {})
     } catch (e) {
       set({ error: errMsg(e) })
     }
@@ -158,7 +203,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   async refreshChats(api) {
     try {
       const resp = await api.listChats()
-      set({ chats: resp.records, people: { ...get().people, ...collectPeople(resp.records) } })
+      set((state) => {
+        // Preserve existing unread entries; default unseen chats to 0.
+        const unread: Record<string, number> = {}
+        for (const c of resp.records) unread[c.id] = state.unread[c.id] ?? 0
+        return {
+          chats: resp.records,
+          people: { ...state.people, ...collectPeople(resp.records) },
+          unread
+        }
+      })
+    } catch (e) {
+      set({ error: errMsg(e) })
+    }
+  },
+
+  async reconcileUnread(api) {
+    // Only meaningful once logged in; otherwise the watermark/me are absent.
+    if (get().auth.status !== 'loggedIn' || !get().me) return
+    try {
+      await get().refreshChats(api)
+      await reconcileUnreadForAll(api, get().chats, get, set)
     } catch (e) {
       set({ error: errMsg(e) })
     }
@@ -237,6 +302,10 @@ export const useAppStore = create<AppState>((set, get) => ({
             : c
         )
       }))
+      // We just authored a message in the active chat → it's read. Advance the
+      // watermark so a later recompute doesn't resurrect it as unread.
+      markChatReadLocally(chatId, get, set)
+      void api.markChatRead(chatId).catch(() => {})
     } catch (e) {
       set((state) =>
         replacePost(state, chatId, localId, { ...optimistic, error: errMsg(e), pending: false })
@@ -287,17 +356,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       const post = body as GlipPost & { eventType: 'PostAdded' }
       set((state) => {
         const existing = state.messages[chatId]
-        // If the chat isn't loaded yet, just bump its unread count + preview.
+        const isActive = state.activeChatId === chatId
+        const isOwn = post.creatorId === state.me?.id
+        // Unread: a new non-own message in an inactive chat bumps the count.
+        // An active chat stays at 0 (the user is looking at it); our own
+        // messages never count as unread.
+        const bump = !isActive && !isOwn
+        const unread = bump
+          ? { ...state.unread, [chatId]: (state.unread[chatId] ?? 0) + 1 }
+          : isActive
+            ? { ...state.unread, [chatId]: 0 }
+            : state.unread
+        // If the chat isn't loaded yet, just bump unread + preview.
         if (!existing) {
           return {
+            unread,
             chats: state.chats.map((c) =>
               c.id === chatId
-                ? {
-                    ...c,
-                    lastMessage: preview(post),
-                    lastModifiedTime: post.creationTime,
-                    unreadCount: state.activeChatId === chatId ? 0 : (c.unreadCount ?? 0) + 1
-                  }
+                ? { ...c, lastMessage: preview(post), lastModifiedTime: post.creationTime }
                 : c
             )
           }
@@ -306,18 +382,20 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (existing.posts.some((p) => p.id === post.id)) return state
         return {
           ...appendPost(state, chatId, enrichOwn(post, state.me)),
+          unread,
           chats: state.chats.map((c) =>
             c.id === chatId
-              ? {
-                  ...c,
-                  lastMessage: preview(post),
-                  lastModifiedTime: post.creationTime,
-                  unreadCount: state.activeChatId === chatId ? 0 : (c.unreadCount ?? 0) + 1
-                }
+              ? { ...c, lastMessage: preview(post), lastModifiedTime: post.creationTime }
               : c
           )
         }
       })
+      // Active chat: advance the watermark to this post and persist, since the
+      // user is viewing it in real time.
+      if (get().activeChatId === chatId && currentApi) {
+        markChatReadLocally(chatId, get, set, post.creationTime)
+        void currentApi.markChatRead(chatId).catch(() => {})
+      }
     } else if (body.eventType === 'PostUpdated') {
       set((state) => updatePost(state, chatId, body.id ?? '', () => body as GlipPost))
     } else if (body.eventType === 'PostRemoved') {
@@ -386,6 +464,153 @@ function collectPeople(chats: GlipChat[]): Record<string, GlipPerson> {
     if (c.person) out[c.person.id] = c.person
   }
   return out
+}
+
+type GetState = StoreApi<AppState>['getState']
+type SetState = StoreApi<AppState>['setState']
+
+/**
+ * Mark a chat as read locally: clear its unread badge and advance the in-memory
+ * watermark to `at` (default: now). Does NOT touch the server — callers handle
+ * persistence via `api.markChatRead` (which the IPC layer persists).
+ */
+function markChatReadLocally(
+  chatId: string,
+  get: GetState,
+  set: SetState,
+  at: string = new Date().toISOString()
+): void {
+  set((state) => ({
+    unread: { ...state.unread, [chatId]: 0 },
+    readStates: { ...state.readStates, [chatId]: at }
+  }))
+}
+
+/**
+ * Build the initial `readStates` + `unread` slices from the persisted watermarks
+ * and the freshly-loaded chat list. Two cases:
+ *
+ *  - First-ever start (empty persisted map): seed each chat's watermark to its
+ *    `lastModifiedTime` so years of history isn't shown as unread. In MOCK mode
+ *    we instead seed demo watermarks so the seeded chats show unread badges.
+ *  - Returning user: keep persisted watermarks; default any new chat to "read
+ *    up to its lastModifiedTime".
+ */
+function seedReadStatesAndUnread(
+  chats: GlipChat[],
+  persisted: Record<string, string>,
+  apiMode: 'mock' | 'real' | undefined
+): Pick<AppState, 'readStates' | 'unread'> {
+  const isFirstStart = Object.keys(persisted).length === 0
+  const readStates: Record<string, string> = { ...persisted }
+  const unread: Record<string, number> = {}
+
+  if (isFirstStart && apiMode === 'mock') {
+    // MOCK demo seed: pretend the user last saw each chat just before its most
+    // recent non-own seeded message, so the sidebar shows unread badges.
+    seedMockDemoReadStates(readStates)
+  }
+
+  for (const c of chats) {
+    if (!(c.id in readStates)) {
+      // First-ever start (real mode) OR a brand-new chat discovered this session:
+      // treat everything up to its current last activity as read.
+      readStates[c.id] = c.lastModifiedTime ?? new Date().toISOString()
+    }
+    unread[c.id] = 0
+  }
+  return { readStates, unread }
+}
+
+/**
+ * MOCK-only: seed read-state watermarks so the seeded chats display their
+ * historical unread counts on first launch (Engineering=2, Alice DM=1), without
+ * sourcing the counts from the server. We pick deterministic timestamps that
+ * sit just *before* the seeded posts we want to count as unread.
+ *
+ * The mock seeds posts at fixed minute-offsets from `Date.now()`, so we anchor
+ * the watermarks relative to "now" the same way (the values only need to be
+ * internally consistent with the posts the cold-start reconcile will fetch).
+ */
+function seedMockDemoReadStates(readStates: Record<string, string>): void {
+  const now = Date.now()
+  // Engineering: 4 posts at 5/4/3/2 min ago; the last two (3m "I will lead
+  // standup today" by me, 2m "shipping the release now" by Carol) are newer
+  // than a 3.5m-ago watermark → 1 unread by a non-owner (Carol). To yield the
+  // classic "2 unread" demo we set the watermark to 4.5m ago so the standup
+  // (alice, 4m) + release (carol, 2m) both count.
+  readStates['team-general'] = new Date(now - 4.5 * 60_000).toISOString()
+  // Alice DM: posts at 30m (alice) and 28m (me). Watermark at 31m → only
+  // alice's "hey, got a sec?" (30m) counts as unread → 1.
+  readStates['chat-dm-alice'] = new Date(now - 31 * 60_000).toISOString()
+}
+
+/**
+ * Cold-start / refresh reconciliation: for every chat whose `lastModifiedTime`
+ * is newer than its persisted watermark, page back through recent posts and count
+ * those newer than the watermark. Chats with no new activity stay at 0 (no
+ * request). Runs in the background after the sidebar renders; each chat's count
+ * updates independently as its fetch completes.
+ */
+async function reconcileUnreadForAll(
+  api: RcmApi,
+  chats: GlipChat[],
+  get: GetState,
+  set: SetState
+): Promise<void> {
+  const meId = get().me?.id
+  const watermarks = get().readStates
+  // Only chats with potential new activity since the watermark need fetching.
+  const candidates = chats.filter(
+    (c) => c.lastModifiedTime && (watermarks[c.id] ?? '') < c.lastModifiedTime!
+  )
+  // Bound concurrency so we don't fire hundreds of simultaneous requests.
+  const CONCURRENCY = 5
+  let cursor = 0
+  const run = async (): Promise<void> => {
+    while (cursor < candidates.length) {
+      const chat = candidates[cursor++]
+      try {
+        const count = await countUnreadViaPages(api, chat.id, watermarks[chat.id], meId)
+        set((state) => ({ unread: { ...state.unread, [chat.id]: count } }))
+      } catch {
+        // Best-effort: leave the chat at its existing (seeded) unread on error.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, run))
+}
+
+/**
+ * Page back through a chat's posts (newest-first) until we cross the watermark,
+ * counting non-own messages newer than it. Safety-valve: stop after MAX_PAGES
+ * pages to guard against pathological/looping data.
+ */
+async function countUnreadViaPages(
+  api: RcmApi,
+  chatId: string,
+  watermark: string | undefined,
+  meId?: string
+): Promise<number> {
+  if (!watermark) return 0
+  const PAGE_SIZE = 500
+  const MAX_PAGES = 20
+  let total = 0
+  let pageToken: string | undefined
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const resp = await api.listPosts({ chatId, pageToken, recordCount: PAGE_SIZE })
+    let reachedWatermark = false
+    for (const p of resp.records) {
+      if (p.creationTime <= watermark) {
+        reachedWatermark = true
+        continue // anything at-or-before the watermark is read
+      }
+      if (p.creatorId !== meId) total += 1
+    }
+    if (reachedWatermark || !resp.nextPageToken) break
+    pageToken = resp.nextPageToken
+  }
+  return total
 }
 
 function appendPost(state: AppState, chatId: string, post: GlipPost): Partial<AppState> {

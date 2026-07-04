@@ -6,8 +6,8 @@ import type { GlipChat, GlipPerson, GlipPost, RealtimeEnvelope } from '../../src
 const me: GlipPerson = { id: 'me', firstName: 'Me' }
 
 const chats: GlipChat[] = [
-  { id: 'c1', type: 'Team', name: 'Engineering', unreadCount: 2 },
-  { id: 'c2', type: 'Direct', name: 'Alice', unreadCount: 0, person: { id: 'u1', firstName: 'Alice' } }
+  { id: 'c1', type: 'Team', name: 'Engineering' },
+  { id: 'c2', type: 'Direct', name: 'Alice', person: { id: 'u1', firstName: 'Alice' } }
 ]
 
 function freshStore() {
@@ -22,6 +22,8 @@ function freshStore() {
     me: null,
     people: {},
     typing: {},
+    unread: {},
+    readStates: {},
     search: null,
     loadingChats: false,
     error: null
@@ -69,8 +71,8 @@ describe('appStore chat selection + pagination', () => {
     const s = useAppStore.getState()
     expect(s.activeChatId).toBe('c1')
     expect(s.messages['c1']?.posts.map((p) => p.id)).toEqual(['p2', 'p1']) // newest first
-    // unread cleared
-    expect(s.chats.find((c) => c.id === 'c1')?.unreadCount).toBe(0)
+    // unread cleared (now tracked in the dedicated map, not on the chat)
+    expect(s.unread['c1']).toBe(0)
   })
 
   it('loadMoreMessages prepends older pages', async () => {
@@ -212,9 +214,10 @@ describe('appStore send/edit/delete + realtime', () => {
       event: '/restapi/v1.0/glip/posts',
       body: { eventType: 'PostAdded', id: 'z1', groupId: 'c2', text: 'ping', creatorId: 'u1', creationTime: new Date().toISOString() }
     })
-    const c2 = useAppStore.getState().chats.find((c) => c.id === 'c2')!
-    expect(c2.unreadCount).toBe(1)
-    expect(c2.lastMessage).toBe('ping')
+    const s = useAppStore.getState()
+    // unread now lives in the dedicated map, keyed by chatId
+    expect(s.unread['c2']).toBe(1)
+    expect(s.chats.find((c) => c.id === 'c2')?.lastMessage).toBe('ping')
   })
 })
 
@@ -239,5 +242,201 @@ describe('appStore typing + theme', () => {
     await useAppStore.getState().setTheme(api, 'light')
     expect(api.calls.updateSettings?.[0]?.[0]).toMatchObject({ theme: 'light' })
     expect(useAppStore.getState().config?.theme).toBe('light')
+  })
+})
+
+describe('appStore unread reconciliation (local watermark)', () => {
+  beforeEach(freshStore)
+
+  it('cold start: counts messages newer than the persisted watermark, excluding own', async () => {
+    // c2's history: two messages newer than the watermark, one of them mine.
+    const watermark = '2024-01-01T00:00:00Z'
+    const posts: GlipPost[] = [
+      { id: 'old', groupId: 'c2', text: 'old', creatorId: 'u1', creationTime: '2023-12-31T23:00:00Z' },
+      { id: 'theirs1', groupId: 'c2', text: 'new1', creatorId: 'u1', creationTime: '2024-01-01T00:01:00Z' },
+      { id: 'mine', groupId: 'c2', text: 'mine', creatorId: 'me', creationTime: '2024-01-01T00:02:00Z' },
+      { id: 'theirs2', groupId: 'c2', text: 'new2', creatorId: 'u1', creationTime: '2024-01-01T00:03:00Z' }
+    ]
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:03:00Z' }],
+      me,
+      posts: { c2: posts },
+      readStates: { c2: watermark }
+    })
+    await useAppStore.getState().doLogin(api)
+    // Background reconcile runs on login; let it settle.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(useAppStore.getState().unread['c2']).toBe(2) // theirs1 + theirs2, mine excluded
+  })
+
+  it('first-ever start (no persisted watermark) seeds read up to lastModifiedTime → 0 unread', async () => {
+    const posts: GlipPost[] = [
+      { id: 'p1', groupId: 'c2', text: 'hi', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }
+    ]
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:00:00Z' }],
+      me,
+      posts: { c2: posts }
+      // no readStates → first start
+    })
+    await useAppStore.getState().doLogin(api)
+    await Promise.resolve()
+    expect(useAppStore.getState().unread['c2'] ?? 0).toBe(0)
+    // watermark seeded to lastModifiedTime so history isn't unread
+    expect(useAppStore.getState().readStates['c2']).toBe('2024-01-01T00:00:00Z')
+  })
+
+  it('selectChat clears unread and advances the watermark', async () => {
+    const api = createFakeApi({
+      chats,
+      me,
+      posts: {
+        c1: [
+          { id: 'p1', groupId: 'c1', text: 'first', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }
+        ]
+      },
+      readStates: { c1: '2023-01-01T00:00:00Z' }
+    })
+    await useAppStore.getState().doLogin(api)
+    await useAppStore.getState().selectChat(api, 'c1')
+    const s = useAppStore.getState()
+    expect(s.unread['c1']).toBe(0)
+    // Watermark advanced to at least the newest visible post.
+    expect((s.readStates['c1'] ?? '') >= '2024-01-01T00:00:00Z').toBe(true)
+  })
+
+  it('reconcileUnread recomputes counts after a missed-realtime interruption (wake/reconnect)', async () => {
+    // Simulate: user was logged in with the chat read up to a watermark, then
+    // the machine slept and a teammate sent messages the client never saw.
+    const watermark = '2024-01-01T00:00:00Z'
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:05:00Z' }],
+      me,
+      posts: {
+        c2: [
+          { id: 'old', groupId: 'c2', text: 'old', creatorId: 'u1', creationTime: '2023-12-31T00:00:00Z' },
+          // Three new messages arrived "while asleep"; one is mine.
+          { id: 'm1', groupId: 'c2', text: 'wake1', creatorId: 'u1', creationTime: '2024-01-01T00:01:00Z' },
+          { id: 'm2', groupId: 'c2', text: 'wake2', creatorId: 'u1', creationTime: '2024-01-01T00:02:00Z' },
+          { id: 'mine', groupId: 'c2', text: 'mine', creatorId: 'me', creationTime: '2024-01-01T00:03:00Z' }
+        ]
+      },
+      readStates: { c2: watermark }
+    })
+    await useAppStore.getState().doLogin(api)
+    await Promise.resolve()
+    // Pretend the user had already cleared the badge; reconcileUnread should
+    // recompute it from the watermark + current history.
+    useAppStore.setState({ unread: { c2: 0 } })
+    await useAppStore.getState().reconcileUnread(api)
+    expect(useAppStore.getState().unread['c2']).toBe(2) // m1 + m2, mine excluded
+  })
+
+  it('reconcileUnread pages back across multiple pages until the watermark is reached', async () => {
+    // Watermark sits before the oldest post, so the reconcile must walk every
+    // page (2 pages of 3) to count them all. Validates multi-page paging +
+    // the stop condition (nextPageToken absent → history exhausted).
+    const watermark = '2023-01-01T00:00:00Z'
+    // 6 posts across 2 pages of 3 (fakeApi page size is overridden via recordCount).
+    const all: GlipPost[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `p${i}`,
+      groupId: 'c2',
+      text: `m${i}`,
+      creatorId: 'u1',
+      creationTime: `2024-01-01T00:0${i}:00Z`
+    }))
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:05:00Z' }],
+      me,
+      posts: { c2: all },
+      readStates: { c2: watermark }
+    })
+    await useAppStore.getState().doLogin(api)
+    await Promise.resolve()
+    // The cold-start reconcile used page size 50 (all 6 on one page). Force a
+    // re-reconcile and assert it counted every newer-than-watermark post.
+    useAppStore.setState({ unread: { c2: 0 } })
+    await useAppStore.getState().reconcileUnread(api)
+    expect(useAppStore.getState().unread['c2']).toBe(6)
+  })
+
+  it('PostAdded to the active chat keeps unread at 0 and advances the watermark', async () => {
+    const api = createFakeApi({
+      chats,
+      me,
+      posts: { c1: [{ id: 'p0', groupId: 'c1', text: 'seed', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }] },
+      readStates: { c1: '2024-01-01T00:00:00Z' }
+    })
+    await useAppStore.getState().doLogin(api)
+    await useAppStore.getState().selectChat(api, 'c1')
+    const before = useAppStore.getState().readStates['c1']
+    // A realtime message newer than the current watermark arrives in the
+    // active chat. Use a timestamp strictly newer than `before`.
+    const liveAt = new Date(Date.now() + 60_000).toISOString()
+    useAppStore.getState().applyRealtime({
+      event: '/restapi/v1.0/glip/posts',
+      body: {
+        eventType: 'PostAdded',
+        id: 'rt1',
+        groupId: 'c1',
+        text: 'live',
+        creatorId: 'u1',
+        creationTime: liveAt
+      }
+    })
+    const s = useAppStore.getState()
+    expect(s.unread['c1']).toBe(0)
+    // Watermark advanced to the new post's creationTime.
+    expect(s.readStates['c1']).toBe(liveAt)
+    expect((s.readStates['c1'] ?? '') > (before ?? '')).toBe(true)
+  })
+
+  it('a PostAdded of my own message never counts as unread', async () => {
+    const api = createFakeApi({ chats, me })
+    await useAppStore.getState().doLogin(api)
+    // c2 is inactive; an own-authored message arrives there.
+    useAppStore.getState().applyRealtime({
+      event: '/restapi/v1.0/glip/posts',
+      body: { eventType: 'PostAdded', id: 'own1', groupId: 'c2', text: 'mine', creatorId: 'me', creationTime: new Date().toISOString() }
+    })
+    expect(useAppStore.getState().unread['c2'] ?? 0).toBe(0)
+  })
+
+  it('sendText advances the active chat watermark (own message is read)', async () => {
+    const api = createFakeApi({
+      chats,
+      me,
+      posts: { c1: [{ id: 'p0', groupId: 'c1', text: 'seed', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }] },
+      readStates: { c1: '2024-01-01T00:00:00Z' }
+    })
+    await useAppStore.getState().doLogin(api)
+    // Capture before selectChat advances it; sendText should advance it further
+    // (or at minimum mark read + invoke markChatRead).
+    const before = useAppStore.getState().readStates['c1']
+    await useAppStore.getState().selectChat(api, 'c1')
+    await useAppStore.getState().sendText(api, 'fresh message')
+    const after = useAppStore.getState().readStates['c1']
+    expect((after ?? '') > (before ?? '')).toBe(true)
+    // markChatRead should also have been invoked (server best-effort + persist).
+    expect(api.calls.markChatRead?.some((args) => args[0] === 'c1')).toBe(true)
+  })
+
+  it('refreshChats preserves existing unread entries and defaults new chats to 0', async () => {
+    const api = createFakeApi({ chats, me })
+    await useAppStore.getState().doLogin(api)
+    // Seed an unread count for c2 and a brand-new chat c3 in the next list.
+    useAppStore.setState({ unread: { c2: 5 } })
+    const api2 = createFakeApi({
+      chats: [
+        ...chats,
+        { id: 'c3', type: 'Team', name: 'New' }
+      ],
+      me
+    })
+    await useAppStore.getState().refreshChats(api2)
+    const s = useAppStore.getState()
+    expect(s.unread['c2']).toBe(5) // preserved
+    expect(s.unread['c3'] ?? 0).toBe(0) // new chat defaults to 0
   })
 })

@@ -44,7 +44,6 @@ interface MockState {
   chats: Map<string, GlipChat>
   teams: Map<string, GlipTeam>
   posts: Map<string, GlipPost[]> // chatId -> posts (chronological)
-  unread: Map<string, number>
 }
 
 const ME: GlipPerson = {
@@ -72,7 +71,6 @@ function seed(people: GlipPerson[]): MockState {
     name: 'Engineering',
     description: 'The whole engineering org',
     membersCount: 3,
-    unreadCount: 2,
     lastModifiedTime: isoMinutesAgo(2),
     lastMessage: 'Carol: shipping the release now 🚀'
   }
@@ -82,7 +80,6 @@ function seed(people: GlipPerson[]): MockState {
     name: 'Design',
     description: 'Product design',
     membersCount: 2,
-    unreadCount: 0,
     lastModifiedTime: isoMinutesAgo(60),
     lastMessage: 'Alice: new mockups in Figma'
   }
@@ -91,7 +88,6 @@ function seed(people: GlipPerson[]): MockState {
     type: 'Direct',
     person: alice,
     membersCount: 2,
-    unreadCount: 1,
     lastModifiedTime: isoMinutesAgo(30),
     lastMessage: 'Alice: hey, got a sec?'
   }
@@ -100,7 +96,6 @@ function seed(people: GlipPerson[]): MockState {
     type: 'Group',
     name: 'Lunch Club',
     membersCount: 3,
-    unreadCount: 0,
     lastModifiedTime: isoMinutesAgo(120),
     lastMessage: 'Bob: tacos again?'
   }
@@ -134,12 +129,7 @@ function seed(people: GlipPerson[]): MockState {
     post('chat-group-lunch', bob.id, 'tacos again?', 120)
   ])
 
-  const unread = new Map<string, number>([
-    [general.id, 2],
-    [dm.id, 1]
-  ])
-
-  return { me: ME, people: personMap, chats, teams, posts, unread }
+  return { me: ME, people: personMap, chats, teams, posts }
 }
 
 function makePerson(id: string, first: string, last: string): GlipPerson {
@@ -238,10 +228,7 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
   }
 
   async listChats(): Promise<PageResult<GlipChat>> {
-    const records = Array.from(this.state.chats.values()).map((c) => ({
-      ...c,
-      unreadCount: this.state.unread.get(c.id) ?? c.unreadCount ?? 0
-    }))
+    const records = Array.from(this.state.chats.values())
     records.sort((a, b) =>
       (b.lastModifiedTime ?? '').localeCompare(a.lastModifiedTime ?? '')
     )
@@ -359,9 +346,9 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
   }
 
   async markChatRead(chatId: string): Promise<void> {
-    this.state.unread.set(chatId, 0)
-    const c = this.state.chats.get(chatId)
-    if (c) c.unreadCount = 0
+    // Unread tracking is a renderer-side concern (watermark-based); the mock
+    // only needs to acknowledge the read. The IPC layer persists the watermark.
+    void chatId
   }
 
   async setTyping(_chatId: string): Promise<void> {
