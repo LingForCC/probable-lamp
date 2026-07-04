@@ -13,7 +13,7 @@ persistent WebSocket connection to RingCentral, with automatic recovery.
 ```
 after login: IpcController ─► realtime.start()
    RingCentralSocket.connect()
-      1. token = getToken()  (refresh if null + refreshToken provided)
+      1. token = getToken()  (the JWT-derived access token; see auth.md)
       2. open WebSocket: wss://ws-api.ringcentral.com?token=<access_token>
       3. onopen → send Subscribe { eventFilters, deliveryMode: WebSocket }
       4. start keepalive (ping every 30s) + stale check
@@ -96,8 +96,9 @@ duplicates.
 - **Self-messages** arrive as realtime events too; they're marked `isOwn` via
   `enrichOwn` and never trigger a desktop notification (see notifications gating).
 - **Reconnect storm**: backoff caps at 30s; `attempts` resets on each successful open.
-- **No token**: if `getToken()` returns null and there's no `refreshToken`, `connect`
-  throws `RingCentralAuthError`.
+- **No token**: under JWT auth the access token is always present after the boot
+  exchange, so `getToken()` is not null. If it ever is (e.g. exchange failed),
+  `connect` throws `RingCentralAuthError`. There is no refresh fallback.
 
 ## MOCK-mode specifics
 

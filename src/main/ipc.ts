@@ -23,7 +23,7 @@ import type {
 } from '../shared/types.js'
 import { IPC } from '../shared/types.js'
 import type { AppStore } from './store.js'
-import type { AuthController, AuthOpener } from './auth.js'
+import type { AuthController } from './auth.js'
 import { shouldNotify, showPostNotification } from './notifications.js'
 
 export interface IpcDeps {
@@ -32,8 +32,6 @@ export interface IpcDeps {
   store: AppStore
   auth: AuthController
   config: ServerConfig
-  /** Open the OAuth authorize URL; resolve with the captured redirect URL. */
-  openExternal: AuthOpener
   /** Get the currently focused window (may be null). */
   getFocusedWindow: () => BrowserWindow | null
   /** Resolve a person by id (best-effort, for notifications). */
@@ -54,59 +52,26 @@ export class IpcController {
   }
 
   private registerAll(): void {
-    const { client, store, auth, config } = this.deps
+    const { client, store, config } = this.deps
 
-    ipcMain.handle(IPC.GET_CONFIG, () => {
-      const settings = store.settings
-      return {
-        // Settings (theme) are user-controlled; server/apiMode come from config.
-        server: settings.server,
-        apiMode: settings.apiMode,
-        clientId: config.clientId,
-        redirectUri: config.redirectUri,
-        theme: settings.theme
-      }
-    })
+    ipcMain.handle(IPC.GET_CONFIG, () => ({
+      // `server`/`apiMode` come from the resolved (env-driven) config; `theme`
+      // is the only user-controlled setting. Never expose secrets (jwt).
+      server: config.server,
+      apiMode: config.apiMode,
+      theme: store.settings.theme
+    }))
 
-    ipcMain.handle(IPC.LOGIN, async () => {
-      const tokens = await auth.login(this.deps.openExternal)
-      store.saveTokens(tokens)
-      client.setTokens(tokens)
-      const me = await client.getMe()
-      this.me = me
-      await this.deps.realtime.start()
-      this.broadcast(IPC.AUTH_STATE_CHANGED, {
-        status: 'loggedIn',
-        me
-      } satisfies AuthState)
-      return { status: 'loggedIn', me } satisfies AuthState
-    })
+    ipcMain.handle(IPC.LOGIN, async () => this.performLogin())
 
     ipcMain.handle(IPC.LOGIN_WITH_TOKEN, async () => {
       // Mock mode login: auth.login handles installing the fake token.
-      const tokens = await auth.login(this.deps.openExternal)
-      store.saveTokens(tokens)
-      client.setTokens(tokens)
-      const me = await client.getMe()
-      this.me = me
-      await this.deps.realtime.start()
-      this.broadcast(IPC.AUTH_STATE_CHANGED, {
-        status: 'loggedIn',
-        me
-      } satisfies AuthState)
-      return { status: 'loggedIn', me } satisfies AuthState
+      return this.performLogin()
     })
 
     ipcMain.handle(IPC.LOGOUT, async () => {
       try {
         await this.deps.realtime.stop()
-        if (!this.deps.client.isMock) {
-          try {
-            await (this.deps.client as unknown as { revokeToken: () => Promise<void> }).revokeToken()
-          } catch {
-            /* ignore revoke failures */
-          }
-        }
       } finally {
         store.clearTokens()
         client.setTokens(null)
@@ -194,6 +159,35 @@ export class IpcController {
     ipcMain.handle(IPC.UPDATE_SETTINGS, (_e, patch: Partial<{ theme: 'light' | 'dark' | 'system' }>) => {
       return store.updateSettings(patch as never)
     })
+  }
+
+  /**
+   * Shared login sequence used by both the IPC LOGIN handler and the auto-login
+   * at boot. Exchanges credentials (JWT in real mode, fake in mock mode), loads
+   * the current user, starts realtime, and broadcasts the new auth state.
+   */
+  async performLogin(): Promise<AuthState> {
+    const { client, store, auth } = this.deps
+    const tokens = await auth.login()
+    store.saveTokens(tokens)
+    client.setTokens(tokens)
+    const me = await client.getMe()
+    this.me = me
+    await this.deps.realtime.start()
+    this.broadcast(IPC.AUTH_STATE_CHANGED, {
+      status: 'loggedIn',
+      me
+    } satisfies AuthState)
+    return { status: 'loggedIn', me } satisfies AuthState
+  }
+
+  /**
+   * Push an auth state to the renderer (used for auto-login result/ error at
+   * boot). Does not touch the client/store — callers handle those.
+   */
+  pushAuthState(state: AuthState): void {
+    if (state.status === 'loggedIn') this.me = state.me
+    this.broadcast(IPC.AUTH_STATE_CHANGED, state)
   }
 
   /** Forward realtime envelopes + typing events to windows and fire notifications. */

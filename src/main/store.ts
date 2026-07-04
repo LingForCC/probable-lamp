@@ -2,8 +2,9 @@
  * Persisted application state with encrypted token storage.
  *
  * Non-secret settings (theme, apiMode, server) are stored in plaintext.
- * The OAuth token set is encrypted with Electron's safeStorage (platform
- * keychain) before being persisted, so tokens at rest are never plaintext.
+ * The access token set (minted from the configured JWT) is encrypted with
+ * Electron's safeStorage (platform keychain) before being persisted, so tokens
+ * at rest are never plaintext.
  */
 import Store from 'electron-store'
 import { safeStorage } from 'electron'
@@ -112,12 +113,14 @@ export class AppStore {
 
   /** Merge persisted settings with a runtime config (env-derived). */
   resolveConfig(env: ServerConfig): ServerConfig {
-    const settings = this.settings
+    // `apiMode`/`server` are env-driven (RC_API_MODE / RC_SERVER / RC_JWT), not
+    // user-controlled, so the env value is the source of truth — a stale
+    // persisted 'mock' from a previous run must NOT override a real .env.
     return {
-      server: settings.server ?? env.server,
-      apiMode: settings.apiMode ?? env.apiMode,
+      server: env.server,
+      apiMode: env.apiMode,
       clientId: env.clientId,
-      redirectUri: env.redirectUri
+      jwt: env.jwt
     }
   }
 }

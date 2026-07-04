@@ -6,7 +6,7 @@ edge cases, and the code that implements it (with file:line references).
 
 | Feature | File | Summary |
 | --- | --- | --- |
-| Authentication & sessions | [auth.md](auth.md) | OAuth Authorization Code + PKCE login, token lifecycle, encrypted storage, logout. |
+| Authentication & sessions | [auth.md](auth.md) | JWT (server) auth: exchange RC_JWT for an access token at boot, encrypted storage, logout. |
 | Send & receive messages | [send-receive.md](send-receive.md) | Composing, optimistic send, history pagination, edit, delete, Markdown + mentions. |
 | Realtime updates | [realtime.md](realtime.md) | WebSocket subscription, PostAdded/Updated/Removed handling, session recovery, reconnect. |
 | Typing indicators | [typing.md](typing.md) | Outbound typing throttling, inbound display, auto-clear. |

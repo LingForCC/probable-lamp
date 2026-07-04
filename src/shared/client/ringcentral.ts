@@ -2,18 +2,23 @@
  * Custom RingCentral Team Messaging (Glip) REST client.
  *
  * No SDK dependency. Implements:
- *   - OAuth Authorization Code + PKCE token exchange, refresh, revoke
- *   - Proactive token refresh (refresh once we're within a safety margin of expiry)
+ *   - JWT bearer grant: exchange a long-lived RC JWT for an access token
  *   - REST calls with bearer auth, JSON, and a 429-aware retry layer
  *   - Glip endpoints: persons/~me, chats, teams, posts CRUD, files, search
  *
- * Network IO (`fetch`) and crypto (`sha256`) are injected so the client can be
- * unit-tested with fakes and run in either main (Node) or renderer (browser).
+ * Network IO (`fetch`) is injected so the client can be unit-tested with fakes
+ * and run in either main (Node) or renderer (browser).
  *
- * NOTE: `executeAuth` (token exchange/refresh/revoke) hits the strict Auth
- * rate-limit bucket (5/min); the REST endpoints hit Medium (40/min). The
- * injected `RateLimiterRegistry` enforces both client-side, and the 429 retry
- * layer is a second line of defense for server-driven throttling.
+ * NOTE: `executeAuth` (the JWT exchange) hits the strict Auth rate-limit bucket
+ * (5/min); the REST endpoints hit Medium (40/min). The injected
+ * `RateLimiterRegistry` enforces both client-side, and the 429 retry layer is a
+ * second line of defense for server-driven throttling.
+ *
+ * Auth model: the long-lived JWT configured via RC_JWT is exchanged once (at
+ * startup or on retry) for an access token, which is then used as the Bearer
+ * credential for REST and as the `?token=` for the WebSocket gateway. JWTs are
+ * not refreshable; if the access token ever stops working, the JWT is
+ * re-exchanged.
  */
 
 import type {
@@ -28,10 +33,17 @@ import type {
   TokenSet
 } from '../types.js'
 import type { RateLimiterRegistry } from './rateLimiter.js'
-import { createCodeChallenge, type Sha256 } from './pkce.js'
 
+/**
+ * RingCentral removed its Developer Sandbox on 2025-01-01; production is now the
+ * only environment (see https://community.ringcentral.com/developer-platform-apis-integrations-5/important-changes-coming-to-our-developer-sandbox-9893).
+ * The legacy `platform.devtest.ringcentral.com` host no longer resolves. We keep
+ * a `sandbox` key for backward compatibility with persisted/existing config but
+ * alias it to the production host so any old `RC_SERVER=sandbox` setting keeps
+ * working instead of failing with a DNS error.
+ */
 export const SERVER_URLS = {
-  sandbox: 'https://platform.devtest.ringcentral.com',
+  sandbox: 'https://platform.ringcentral.com',
   production: 'https://platform.ringcentral.com'
 } as const
 
@@ -44,30 +56,21 @@ export type FetchLike = typeof fetch
 
 export interface RingCentralClientOptions {
   server: ServerEnv
-  clientId: string
-  /** client_secret. Required for confidential refresh in some app configs; undefined for pure-PKCE public clients. */
+  /** Long-lived RingCentral JWT used to mint access tokens (RC_JWT). */
+  jwt: string
+  /** Optional client id/secret retained for app identity / future use. */
+  clientId?: string
   clientSecret?: string
-  redirectUri: string
   fetch?: FetchLike
-  sha256?: Sha256
   limiter: RateLimiterRegistry
   /** clock for token-expiry math (tests) */
   now?: () => number
-  /** safety margin: refresh this many ms before access_token expiry */
-  refreshMarginMs?: number
   /**
-   * Called whenever the token set changes (exchange, refresh, revoke, explicit
-   * set). Lets the main process re-persist tokens to the encrypted store after
-   * a REST-driven refresh, so a crash doesn't revert to a stale token.
+   * Called whenever the token set changes (exchange, explicit set). Lets the
+   * main process re-persist tokens to the encrypted store after a JWT exchange
+   * so a crash doesn't lose the freshly minted token.
    */
   onTokensChanged?: (tokens: TokenSet | null) => void
-}
-
-/** Result of the PKCE authorize URL build. */
-export interface AuthorizeUrlResult {
-  url: string
-  state: string
-  verifier: string
 }
 
 export class RingCentralError extends Error {
@@ -89,14 +92,29 @@ export class RingCentralAuthError extends RingCentralError {
 }
 
 /**
- * Narrowed interface a controller can use to reach the PKCE/token methods that
+ * Narrowed interface a controller can use to reach the JWT/token methods that
  * only exist on the real client. Cast to this only in real mode.
  */
 export interface RealClientTokenOps {
-  buildAuthorizeUrl(state: string, verifier: string): Promise<AuthorizeUrlResult>
-  exchangeCodeForToken(code: string, verifier: string): Promise<TokenSet>
-  refreshTokens(): Promise<TokenSet>
-  revokeToken(): Promise<void>
+  exchangeJwtForToken(jwt: string): Promise<TokenSet>
+}
+
+/**
+ * Subset of the `/restapi/v1.0/account/~/extension/~` response used by getMe().
+ * The extension `id` is the same identifier Glip uses for `creatorId`, so
+ * mapping it onto `GlipPerson.id` keeps own-message detection correct.
+ */
+interface ExtensionInfo {
+  id: number | string
+  status?: string
+  contact?: {
+    firstName?: string
+    lastName?: string
+    email?: string
+  }
+  profileImage?: {
+    uri?: string
+  }
 }
 
 function query(params: Record<string, string | number | undefined>): string {
@@ -135,12 +153,10 @@ export class RingCentralClient implements IMessagingClient {
   private tokens: TokenSet | null = null
   private readonly fetcher: FetchLike
   private readonly now: () => number
-  private readonly refreshMarginMs: number
 
   constructor(private readonly opts: RingCentralClientOptions) {
     this.fetcher = opts.fetch ?? globalThis.fetch
     this.now = opts.now ?? Date.now
-    this.refreshMarginMs = opts.refreshMarginMs ?? 60_000
   }
 
   get baseUrl(): string {
@@ -158,99 +174,51 @@ export class RingCentralClient implements IMessagingClient {
     return this.tokens
   }
 
-  isAccessTokenExpired(): boolean {
-    if (!this.tokens) return true
-    const expiresAt = this.tokens.obtainedAt + this.tokens.expires_in * 1000
-    return this.now() >= expiresAt - this.refreshMarginMs
-  }
-
-  private hasRefreshToken(): boolean {
-    return !!this.tokens?.refresh_token
-  }
-
-  /** Build a PKCE authorize URL (browser/main opens it in a BrowserWindow). */
-  async buildAuthorizeUrl(state: string, verifier: string): Promise<AuthorizeUrlResult> {
-    if (!this.opts.sha256) throw new Error('sha256 is required to build the authorize URL')
-    const challenge = await createCodeChallenge(verifier, this.opts.sha256)
-    const url =
-      `${this.baseUrl}/restapi/oauth/authorize` +
-      query({
-        response_type: 'code',
-        state,
-        client_id: this.opts.clientId,
-        redirect_uri: this.opts.redirectUri,
-        code_challenge: challenge,
-        code_challenge_method: 'S256'
-      })
-    return { url, state, verifier }
-  }
-
-  /** Exchange an authorization code for tokens (Auth rate bucket). */
-  async exchangeCodeForToken(code: string, verifier: string): Promise<TokenSet> {
+  /**
+   * Exchange the configured long-lived JWT for an access token using the
+   * jwt-bearer grant (Auth rate bucket). The returned access token is used as
+   * the Bearer credential for REST and as the `?token=` for the WebSocket.
+   */
+  async exchangeJwtForToken(jwt: string): Promise<TokenSet> {
     const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: this.opts.redirectUri,
-      client_id: this.opts.clientId,
-      code_verifier: verifier
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt
     })
-    if (this.opts.clientSecret) {
-      body.set('client_secret', this.opts.clientSecret)
-    }
-    return this.executeAuth(body)
-  }
-
-  /** Refresh the access token (Auth rate bucket). */
-  async refreshTokens(): Promise<TokenSet> {
-    if (!this.hasRefreshToken()) throw new RingCentralAuthError('No refresh token', null)
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: this.tokens!.refresh_token,
-      client_id: this.opts.clientId
-    })
-    if (this.opts.clientSecret) {
-      body.set('client_secret', this.opts.clientSecret)
-    }
-    const refreshed = await this.executeAuth(body)
+    const tokens = await this.executeAuth(body)
     // Persist via setTokens so the onTokensChanged hook re-persists to the
-    // encrypted store (a REST-driven refresh should survive a crash).
-    this.setTokens(refreshed)
-    return refreshed
+    // encrypted store (a freshly minted token should survive a crash).
+    this.setTokens(tokens)
+    return tokens
   }
 
-  /** Revoke the current token (Auth rate bucket). */
-  async revokeToken(): Promise<void> {
-    if (!this.tokens) return
-    const body = new URLSearchParams({
-      token: this.tokens.access_token,
-      client_id: this.opts.clientId
-    })
-    if (this.opts.clientSecret) {
-      body.set('client_secret', this.opts.clientSecret)
-    }
-    try {
-      await this.executeAuth(body, '/restapi/oauth/revoke')
-    } finally {
-      this.setTokens(null)
-    }
-  }
-
-  /** POST to /restapi/oauth/token (or a custom path) respecting the Auth rate limit. */
-  private async executeAuth(
-    body: URLSearchParams,
-    path = '/restapi/oauth/token'
-  ): Promise<TokenSet> {
+  /**
+   * POST to /restapi/oauth/token respecting the Auth rate limit.
+   *
+   * RingCentral authenticates the *app* (client) via an HTTP Basic header
+   * carrying `client_id:client_secret` — even for the JWT-bearer grant. Omitting
+   * it yields `invalid_client`. The JWT in the body then authenticates the user
+   * / extension. See https://community.ringcentral.com/developer-platform-apis-integrations-5/jwt-error-error-client-authentication-is-required-node-sdk-6290.
+   */
+  private async executeAuth(body: URLSearchParams): Promise<TokenSet> {
     await this.opts.limiter.waitFor('auth')
-    const res = await this.fetcher(`${this.baseUrl}${path}`, {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json'
+    }
+    if (this.opts.clientId && this.opts.clientSecret) {
+      const basic = Buffer.from(`${this.opts.clientId}:${this.opts.clientSecret}`).toString('base64')
+      headers.Authorization = `Basic ${basic}`
+    }
+    const res = await this.fetcher(`${this.baseUrl}/restapi/oauth/token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers,
       body: body.toString()
     })
     if (res.status === 429) {
       const retry = Number(res.headers.get('retry-after') ?? '1')
       await delay(retry * 1000)
       // single retry after backoff
-      return this.executeAuth(body, path)
+      return this.executeAuth(body)
     }
     const json = await res.json().catch(() => null)
     if (!res.ok) {
@@ -265,32 +233,14 @@ export class RingCentralClient implements IMessagingClient {
   // ── REST helper ──────────────────────────────────────────────────────────
 
   /**
-   * Run a REST call with: proactive token refresh, rate-limit gating, bearer
-   * auth, 429 retry-with-backoff, and 401 → refresh-and-retry-once.
+   * Run a REST call with: rate-limit gating, bearer auth, and a 429-aware
+   * retry layer.
    */
   private async rest<T>(
     method: string,
     path: string,
     opts: { query?: Record<string, string | number | undefined>; body?: unknown } = {}
   ): Promise<T> {
-    return this.restInternal<T>(method, path, opts, /* did401 */ false)
-  }
-
-  private async restInternal<T>(
-    method: string,
-    path: string,
-    opts: { query?: Record<string, string | number | undefined>; body?: unknown },
-    did401: boolean
-  ): Promise<T> {
-    // Proactive refresh: refresh before the access token expires.
-    if (this.isAccessTokenExpired()) {
-      if (this.hasRefreshToken()) {
-        await this.refreshTokens()
-      } else {
-        throw new RingCentralAuthError('Access token expired and no refresh token', null)
-      }
-    }
-
     await this.opts.limiter.waitFor('medium')
     const url = `${this.baseUrl}${path.startsWith('/restapi') ? path : '/restapi/v1.0' + path}${query(opts.query ?? {})}`
     const res = await this.fetcher(url, {
@@ -306,13 +256,7 @@ export class RingCentralClient implements IMessagingClient {
     if (res.status === 429) {
       const retry = Number(res.headers.get('retry-after') ?? '1')
       await delay(Math.max(500, retry * 1000))
-      return this.restInternal<T>(method, path, opts, did401)
-    }
-
-    if (res.status === 401 && !did401) {
-      // refresh once and retry
-      await this.refreshTokens()
-      return this.restInternal<T>(method, path, opts, true)
+      return this.rest<T>(method, path, opts)
     }
 
     const text = await res.text()
@@ -327,8 +271,27 @@ export class RingCentralClient implements IMessagingClient {
 
   // ── Glip endpoints ───────────────────────────────────────────────────────
 
+  /**
+   * Return the current user as a GlipPerson.
+   *
+   * RingCentral removed the `/glip/persons/~me` convenience endpoint (it now
+   * 400s with "personId contains invalid value '~me'"). The canonical way to
+   * identify the authenticated user is the Extension endpoint
+   * `/restapi/v1.0/account/~/extension/~`, whose `id` is the same person id
+   * used as Glip posts' `creatorId` (so own-message detection keeps working).
+   * We map the extension fields onto GlipPerson here.
+   */
   async getMe(): Promise<GlipPerson> {
-    return this.rest<GlipPerson>('GET', '/glip/persons/~me')
+    const ext = await this.rest<ExtensionInfo>('GET', '/account/~/extension/~')
+    const contact = ext.contact
+    return {
+      id: String(ext.id),
+      firstName: contact?.firstName,
+      lastName: contact?.lastName,
+      email: contact?.email,
+      avatar: ext.profileImage?.uri,
+      status: ext.status
+    }
   }
 
   async listChats(): Promise<PageResult<GlipChat>> {

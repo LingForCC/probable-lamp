@@ -31,12 +31,16 @@ import { IPC } from '../../src/shared/types'
 import type {
   GlipPerson,
   IMessagingClient,
+  RealtimeEnvelope,
+  RealtimeListener,
   RealtimeSubscription,
   ServerConfig,
-  TokenSet
+  TokenSet,
+  TypingListener,
+  TypingPayload
 } from '../../src/shared/types'
 import type { AppStore, AppSettings } from '../../src/main/store'
-import type { AuthController, AuthOpener } from '../../src/main/auth'
+import type { AuthController } from '../../src/main/auth'
 
 // ── fakes ────────────────────────────────────────────────────────────────────
 
@@ -65,43 +69,44 @@ function makeClient(overrides: Partial<IMessagingClient> = {}): IMessagingClient
 function makeStore(overrides: Partial<AppStore> = {}): AppStore {
   const settings: AppSettings = { theme: 'system', server: 'sandbox', apiMode: 'mock' }
   let readStates: Record<string, string> = {}
-  return {
+  const store = {
     settings,
-    updateSettings: (patch) => ({ ...settings, ...patch }),
+    updateSettings: (patch: Partial<AppSettings>) => ({ ...settings, ...patch }),
     canEncrypt: () => true,
-    saveTokens: () => {},
-    loadTokens: () => null,
+    saveTokens: (_tokens: TokenSet | null) => {},
+    loadTokens: () => null as TokenSet | null,
     clearTokens: () => {},
     getReadStates: () => readStates,
-    setReadState: (chatId, iso) => {
+    setReadState: (chatId: string, iso: string) => {
       readStates = { ...readStates, [chatId]: iso }
     },
-    resolveConfig: (env) => ({
+    resolveConfig: (env: ServerConfig) => ({
       server: env.server,
       apiMode: env.apiMode,
       clientId: env.clientId,
-      redirectUri: env.redirectUri
+      jwt: env.jwt
     }),
     ...overrides
   }
+  return store as unknown as AppStore
 }
 
 function makeRealtime(): RealtimeSubscription & {
-  realtimeCb: ((e: unknown) => void) | null
-  typingCb: ((p: unknown) => void) | null
+  realtimeCb: ((e: RealtimeEnvelope) => void) | null
+  typingCb: ((p: TypingPayload) => void) | null
 } {
   const rt = {
-    realtimeCb: null as ((e: unknown) => void) | null,
-    typingCb: null as ((p: unknown) => void) | null,
+    realtimeCb: null as ((e: RealtimeEnvelope) => void) | null,
+    typingCb: null as ((p: TypingPayload) => void) | null,
     async start() {},
     async stop() {},
-    onRealtime(cb: (e: unknown) => void) {
+    onRealtime(cb: RealtimeListener) {
       rt.realtimeCb = cb
       return () => {
         rt.realtimeCb = null
       }
     },
-    onTyping(cb: (p: unknown) => void) {
+    onTyping(cb: TypingListener) {
       rt.typingCb = cb
       return () => {
         rt.typingCb = null
@@ -128,7 +133,6 @@ function makeDeps(overrides: {
     store: makeStore(overrides.store),
     auth: makeAuth(),
     config: { server: 'sandbox', apiMode: 'mock' } as ServerConfig,
-    openExternal: (async () => '') as AuthOpener,
     getFocusedWindow: () => null
   }
 }

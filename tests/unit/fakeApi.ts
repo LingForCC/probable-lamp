@@ -51,8 +51,6 @@ export function createFakeApi(opts: {
       return {
         server: 'sandbox',
         apiMode: 'mock',
-        clientId: 'cid',
-        redirectUri: 'http://localhost/cb',
         theme: 'dark'
       }
     },

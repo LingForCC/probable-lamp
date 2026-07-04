@@ -25,7 +25,7 @@ credentials and no network.
 │               │                                 │                 │
 │  Main process │                                 │                 │
 │  ┌────────────┴─────────────────┐  ┌────────────┴──────────┐      │
-│  │ IpcController                │  │ AuthController (PKCE)  │      │
+│  │ IpcController                │  │ AuthController (JWT)   │      │
 │  │  • forwards realtime/typing  │  │ AppStore (safeStorage) │      │
 │  │  • fires notifications       │  │ createMainWindow       │      │
 │  └────────────▲─────────────────┘  └────────────────────────┘      │
@@ -36,7 +36,7 @@ credentials and no network.
 │  │  index.ts ──► RingCentralClient (REST) ──► RingCentral API  │   │
 │  │          └──► RingCentralSocket (WS)   ──► wss://…/posts    │   │
 │  │          └──► MockMessagingClient (in-memory fake)         │   │
-│  │  + pkce.ts · rateLimiter.ts                                │   │
+│  │  + rateLimiter.ts                                          │   │
 │  └────────────────────────────────────────────────────────────┘   │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -45,7 +45,7 @@ credentials and no network.
 
 | Layer | Path | Responsibility |
 | --- | --- | --- |
-| **Main** | `src/main/` | App lifecycle, window, OAuth, IPC handlers, notifications, encrypted token store. Node APIs live here. |
+| **Main** | `src/main/` | App lifecycle, window, JWT auth, IPC handlers, notifications, encrypted token store. Node APIs live here. |
 | **Preload** | `src/preload/` | A typed `window.rcm` bridge via `contextBridge`. Strict allow-list of IPC invokers + push subscribers. **No Node is exposed to the renderer.** |
 | **Renderer** | `src/renderer/` | React UI + `zustand` store. Talks to the world only through `window.rcm`. |
 
@@ -70,21 +70,21 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
                   └──► real  ? RingCentralClient (REST) + RingCentralSocket (WS)
 ```
 
-- **`ringcentral.ts`** — REST: OAuth Authorization Code + PKCE, proactive refresh
-  (60s margin), 401→refresh→retry-once, 429 backoff, all Glip endpoints. All IO
-  (`fetch`, `sha256`, clock) is injected for testability. An `onTokensChanged`
-  hook lets main re-persist tokens after a REST-driven refresh.
+- **`ringcentral.ts`** — REST: JWT bearer grant exchange (`grant_type=
+  urn:ietf:params:oauth:grant-type:jwt-bearer`), 429 backoff, all Glip endpoints.
+  All IO (`fetch`, clock) is injected for testability. An `onTokensChanged` hook
+  lets main re-persist tokens after a JWT exchange. No refresh / no revoke (the
+  JWT-derived access token is treated as non-expiring).
 - **`websocket.ts`** — `wss://ws-api.ringcentral.com` subscribe/keepalive, with
   **session recovery** (replays from the last `sequenceId`) and exponential-backoff
   reconnect.
 - **`rateLimiter.ts`** — token-bucket limiter per RingCentral rate group (Auth 5/min,
   Medium 40/min, Light 50/min) with an injected clock/scheduler for deterministic tests.
-- **`pkce.ts`** — RFC 7636 PKCE helpers (verifier/challenge), with an injected hash.
 - **`mock/mockClient.ts`** — fake backend with seeded data and a simulated realtime
   auto-reply; identical interface to the real client.
 
-> **Why no SDK?** You asked for a custom client. The injected `fetch`/`sha256`/clock
-> design keeps the whole client unit-testable without Electron or network.
+> **Why no SDK?** You asked for a custom client. The injected `fetch`/clock design
+> keeps the whole client unit-testable without Electron or network.
 
 ## Data flow: send a message + receive a realtime reply
 
@@ -106,7 +106,7 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
 
 1. **Strict IPC contract.** Channel names live in `shared/types.ts`. The preload and
    main reference the same constants — no stringly-typed channels, no typos.
-2. **Injectable IO everywhere.** `fetch`, `sha256`, the clock, the scheduler, and the
+2. **Injectable IO everywhere.** `fetch`, the clock, the scheduler, and the
    WebSocket factory are all constructor parameters. This is why the client, the rate
    limiter, the WebSocket client, and the store are all unit-tested with fakes and no
    real timers.
@@ -119,7 +119,7 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
    sanitized before rendering.
 5. **MOCK-first.** The app boots into MOCK mode with no `.env`, so it's demoable and
    fully testable offline. Real mode activates only when `RC_API_MODE=real` **and**
-   `RC_CLIENT_ID` are set.
+   `RC_JWT` are set.
 6. **Local unread counts.** The server's per-chat `unreadCount` is ignored. Unread is
    computed client-side from a persisted per-chat `lastReadTime` watermark
    (`AppStore.readStates`): a message is unread iff newer than the watermark and not
@@ -135,9 +135,9 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
 
 ## Testing strategy
 
-- **Unit (Vitest, 124 tests)** — `pkce` (incl. the RFC 7636 S256 vector), `rateLimiter`,
-  the REST client (auth/refresh/pagination/429/proactive-refresh/endpoints), the WS
-  client (subscribe/dispatch/sequenceId/reconnect/session-recovery), the mock client,
+- **Unit (Vitest, 111 tests)** — `rateLimiter`, the REST client
+  (JWT-exchange/pagination/429/endpoints), the WS client
+  (subscribe/dispatch/sequenceId/reconnect/session-recovery), the mock client,
   `notifications`, the renderer `appStore`, the `MessageItem` component, and utils.
 - **E2E (Playwright, 3 tests)** — builds the app then drives the **packaged Electron
   binary** in MOCK mode through the full flow (login → chats → send → realtime reply →

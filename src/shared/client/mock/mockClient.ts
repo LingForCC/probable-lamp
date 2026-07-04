@@ -194,10 +194,8 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
   login(): TokenSet {
     this.tokens = {
       access_token: 'mock-access-token',
-      refresh_token: 'mock-refresh-token',
       token_type: 'bearer',
       expires_in: 3600,
-      refresh_token_expires_in: 604800,
       scope: 'TeamMessaging',
       owner_id: this.state.me.id,
       obtainedAt: this.now()

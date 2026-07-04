@@ -34,17 +34,19 @@ export function LoginScreen() {
           className="w-full rounded-lg bg-brand-600 px-4 py-2.5 font-semibold text-white transition hover:bg-brand-500 active:scale-[0.99] disabled:opacity-50"
           disabled={auth.status === 'authenticating'}
         >
-          {isMock ? 'Enter demo' : 'Sign in with RingCentral'}
+          {isMock ? 'Enter demo' : 'Retry connection'}
         </button>
 
         {!isMock && (
           <p className="mt-4 text-center text-xs text-slate-500">
-            You will be redirected to RingCentral to authorize this app.
+            The app connects automatically using the configured{' '}
+            <code className="rounded bg-slate-800 px-1">RC_JWT</code>. If the
+            connection fails, check your JWT and try again.
           </p>
         )}
         {isMock && (
           <p className="mt-4 text-center text-xs text-slate-500">
-            Set <code className="rounded bg-slate-800 px-1">RC_CLIENT_ID</code> and{' '}
+            Set <code className="rounded bg-slate-800 px-1">RC_JWT</code> and{' '}
             <code className="rounded bg-slate-800 px-1">RC_API_MODE=real</code> to use a real account.
           </p>
         )}

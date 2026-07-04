@@ -3,16 +3,17 @@
 A desktop IM app (Slack-like) for **RingCentral Team Messaging** (Glip), built with
 **Electron + React + TypeScript + Vite + Tailwind CSS**. It ships with a full
 **MOCK mode** so you can run and test the entire app with **zero credentials and no
-network**, then drop in real RingCentral OAuth credentials to use it against the
-live API.
+network**, then drop in a RingCentral JWT to use it against the live API.
 
 ---
 
 ## Features
 
-- **OAuth Authorization Code + PKCE** login in a secure `BrowserWindow`; access &
-  refresh tokens persisted with Electron `safeStorage` (encrypted at rest).
-- **Proactive token refresh** before expiry, plus a `401 → refresh → retry` path.
+- **JWT (server) auth**: the long-lived `RC_JWT` is exchanged for an access token
+  automatically at startup (auto-connect, no login button). The access token is
+  persisted with Electron `safeStorage` (encrypted at rest).
+- **No refresh / no revoke**: the JWT-derived access token is treated as
+  non-expiring; logout clears local state without server-side revocation.
 - **Conversation sidebar**: teams, groups, direct messages; unread badges
   (computed locally via a persisted per-chat read watermark, not the server
   count), search/filter, avatars, relative timestamps.
@@ -30,7 +31,7 @@ live API.
 - **Attachments**: file upload via `POST /glip/files` (rendered as chips/cards).
 - **Search** across messages.
 - **Settings**: light/dark/system theme, sandbox/production server, MOCK toggle,
-  log out (revokes the token).
+  log out.
 - **Client-side rate limiting** (token bucket) honoring RingCentral's buckets
   (Auth 5/min, Medium 40/min, …) with a server-driven `429` retry backstop.
 
@@ -49,23 +50,21 @@ realtime replies, edit/delete, theme switching, etc.
 
 ### Use the real RingCentral API
 
-1. Register a **REST API App** at <https://developer.ringcentral.com>.
-2. Under **Settings → OAuth Redirect URIs**, add your redirect URI
-   (default: `http://localhost:4173/auth/callback`).
-3. Enable scopes: **Team Messaging**, **WebSocket Subscriptions**, **Read Accounts**.
+1. Register a **REST API App** (server-only) at <https://developer.ringcentral.com>.
+2. Enable scopes: **Team Messaging**, **WebSocket Subscriptions**, **Read Accounts**.
+3. In the developer console, generate a **JWT** for the app.
 4. Copy `.env.example` to `.env` and fill in:
 
    ```ini
-   RC_CLIENT_ID=your_app_key
-   RC_CLIENT_SECRET=your_app_secret        # optional for pure-PKCE public clients
-   RC_REDIRECT_URI=http://localhost:4173/auth/callback
+   RC_JWT=your_long_lived_jwt
    RC_SERVER=sandbox                       # or production
    RC_API_MODE=real
    ```
 
-5. `npm run dev` and sign in with RingCentral.
+5. `npm run dev`. The app exchanges the JWT for an access token at startup and
+   connects automatically — no sign-in step.
 
-> With no `RC_CLIENT_ID` set, the app automatically falls back to MOCK mode.
+> With no `RC_JWT` set, the app automatically falls back to MOCK mode.
 
 ---
 
@@ -78,10 +77,9 @@ src/
     window.ts       BrowserWindow factory
     ipc.ts          IPC controller (renderer ⇄ main ⇄ client)
     store.ts        electron-store + safeStorage (encrypted tokens, settings)
-    auth.ts         OAuth Authorization Code + PKCE flow
+    auth.ts         JWT login controller (mock + JWT branches)
     notifications.ts desktop notifications for incoming messages
     config.ts       env-based config resolution
-    nodeCrypto.ts   Node SHA-256 + base64 for PKCE
   preload/       contextBridge exposing a typed `window.rcm` API (no Node exposed)
   renderer/      React + Tailwind UI
     store/appStore.ts   zustand state (auth, chats, messages, realtime, theme)
@@ -92,24 +90,22 @@ src/
     types.ts        Glip data model, IPC channel contract, client interface
     rcmApi.ts       typed shape of the preload bridge
     client/
-      pkce.ts         RFC 7636 PKCE helpers (injectable hash/encoder)
       rateLimiter.ts  token-bucket limiter per RC rate group
-      ringcentral.ts  custom REST client (auth, refresh, 429 retry, all Glip endpoints)
+      ringcentral.ts  custom REST client (JWT exchange, 429 retry, all Glip endpoints)
       websocket.ts    WS client (subscribe, keepalive, reconnect, session recovery)
       mock/           in-memory mock backend (same interface, simulated realtime)
       index.ts        factory: returns Mock or Real client + realtime source
 tests/
-  unit/   vitest + jsdom (pkce, rate limiter, REST client, WS, mock, store, components, utils, notifications)
+  unit/   vitest + jsdom (rate limiter, REST client, WS, mock, store, components, utils, notifications)
   e2e/     Playwright driving the packaged Electron app in MOCK mode
 ```
 
 ### Design notes
 
 - **No RingCentral SDK.** A custom REST client (`ringcentral.ts`) and WebSocket
-  client (`websocket.ts`) implement auth, refresh, rate limiting, 429 retry,
-  keepalive, reconnect, and session recovery directly. All IO (fetch, sha256,
-  clock, scheduler) is dependency-injected so everything is unit-testable with
-  fakes.
+  client (`websocket.ts`) implement JWT auth, rate limiting, 429 retry,
+  keepalive, reconnect, and session recovery directly. All IO (fetch, clock,
+  scheduler) is dependency-injected so everything is unit-testable with fakes.
 - **Strict IPC contract.** Channel names live in `shared/types.ts` (`IPC`) and are
   shared by the preload bridge and main handlers, preventing typos.
 - **Test isolation.** The mock client and a fake `window.rcm` API let the store
@@ -136,12 +132,12 @@ tests/
 
 ## Testing
 
-- **Unit (101 tests):** PKCE (incl. the RFC 7636 S256 test vector), rate limiter
-  (refill/backoff/capacity), the REST client (auth/refresh/pagination/429/proactive
-  refresh/all endpoints), the WebSocket client (subscribe/dispatch/sequenceId/
-  reconnect/session recovery), the mock client, the notifications logic, the
-  renderer store (login/select/send/edit/delete/realtime/dedup/typing/theme), the
-  message component, and the markdown/time utils.
+- **Unit (111 tests):** rate limiter (refill/backoff/capacity), the REST client
+  (JWT exchange/pagination/429/all endpoints), the WebSocket client
+  (subscribe/dispatch/sequenceId/reconnect/session recovery), the mock client,
+  the notifications logic, the renderer store
+  (login/select/send/edit/delete/realtime/dedup/typing/theme), the message
+  component, and the markdown/time utils.
 - **E2E (3 tests):** drive the packaged Electron app in MOCK mode through the
   full flow — login → browse chats → open a chat → send → receive a simulated
   realtime reply → edit → delete → theme toggle → logout — plus creating a team

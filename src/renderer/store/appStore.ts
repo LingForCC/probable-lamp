@@ -70,6 +70,12 @@ export interface AppState {
   deleteMessage: (api: RcmApi, postId: string) => Promise<void>
   applyRealtime: (envelope: RealtimeEnvelope) => void
   applyTyping: (payload: TypingPayload) => void
+  /**
+   * Apply an auth-state push from main (auto-login result at boot, login,
+   * logout). On `loggedIn` it loads the user + chats; on `loggedOut` it resets
+   * local state; on `error` it surfaces the message so the user can retry.
+   */
+  applyAuthState: (api: RcmApi, state: AuthState) => Promise<void>
   runSearch: (api: RcmApi, query: string) => Promise<void>
   setTheme: (api: RcmApi, theme: 'light' | 'dark' | 'system') => Promise<void>
   setError: (msg: string | null) => void
@@ -173,7 +179,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().messages[chatId]
     if (existing && existing.posts.length > 0) {
       // already loaded; just mark read (advances watermark, clears unread)
-      markChatReadLocally(chatId, get, set)
+      markChatReadLocally(chatId, set)
       void api.markChatRead(chatId).catch(() => {})
       return
     }
@@ -193,7 +199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Opening the chat reads it: clear the unread badge, advance the
       // watermark to the newest visible message, and persist server-side.
       set((state) => ({ unread: { ...state.unread, [chatId]: 0 } }))
-      markChatReadLocally(chatId, get, set)
+      markChatReadLocally(chatId, set)
       void api.markChatRead(chatId).catch(() => {})
     } catch (e) {
       set({ error: errMsg(e) })
@@ -304,7 +310,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
       // We just authored a message in the active chat → it's read. Advance the
       // watermark so a later recompute doesn't resurrect it as unread.
-      markChatReadLocally(chatId, get, set)
+      markChatReadLocally(chatId, set)
       void api.markChatRead(chatId).catch(() => {})
     } catch (e) {
       set((state) =>
@@ -393,7 +399,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Active chat: advance the watermark to this post and persist, since the
       // user is viewing it in real time.
       if (get().activeChatId === chatId && currentApi) {
-        markChatReadLocally(chatId, get, set, post.creationTime)
+        markChatReadLocally(chatId, set, post.creationTime)
         void currentApi.markChatRead(chatId).catch(() => {})
       }
     } else if (body.eventType === 'PostUpdated') {
@@ -423,6 +429,47 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       })
     }, 4000)
+  },
+
+  async applyAuthState(api, state) {
+    // Ignore a stale push that matches the current state.
+    if (get().auth.status === state.status) {
+      // For loggedIn, still ensure user/chats are loaded (idempotent re-entry).
+      if (state.status !== 'loggedIn') return
+    }
+    rememberApi(api)
+    if (state.status === 'loggedIn') {
+      set({ auth: state })
+      try {
+        const [me, chatsResp] = await Promise.all([api.getMe(), api.listChats()])
+        const readStates = await api.getReadStates()
+        const apiMode = get().config?.apiMode
+        set({
+          me,
+          chats: chatsResp.records,
+          people: collectPeople(chatsResp.records),
+          ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
+        })
+        void reconcileUnreadForAll(api, chatsResp.records, get, set)
+      } catch (e) {
+        set({ error: errMsg(e) })
+      }
+    } else if (state.status === 'loggedOut') {
+      set({
+        auth: state,
+        me: null,
+        chats: [],
+        activeChatId: null,
+        messages: {},
+        people: {},
+        typing: {},
+        unread: {},
+        readStates: {}
+      })
+    } else {
+      // authenticating | error
+      set({ auth: state })
+    }
   },
 
   async runSearch(api, query) {
@@ -476,7 +523,6 @@ type SetState = StoreApi<AppState>['setState']
  */
 function markChatReadLocally(
   chatId: string,
-  get: GetState,
   set: SetState,
   at: string = new Date().toISOString()
 ): void {

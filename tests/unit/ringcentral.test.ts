@@ -38,7 +38,7 @@ interface RecordedRequest {
  * Responses are matched by URL substring (in insertion order); a special
  * `'*'` entry matches any URL (used as a default/fallback).
  */
-function makeClient(opts: { now?: () => number; refreshMarginMs?: number } = {}) {
+function makeClient(opts: { now?: () => number } = {}) {
   const requests: RecordedRequest[] = []
   const queue: Array<{ match: string; resp: MockResponse }> = []
 
@@ -70,13 +70,11 @@ function makeClient(opts: { now?: () => number; refreshMarginMs?: number } = {})
 
   const client = new RingCentralClient({
     server: 'sandbox',
+    jwt: 'test-jwt',
     clientId: 'cid',
     clientSecret: 'csecret',
-    redirectUri: 'http://localhost/cb',
     fetch: fetch as unknown as typeof fetch,
-    sha256: async (b) => b,
     limiter,
-    refreshMarginMs: opts.refreshMarginMs ?? 0,
     now: opts.now ?? Date.now
   })
 
@@ -102,91 +100,57 @@ describe('RingCentralClient URLs', () => {
 })
 
 describe('RingCentralClient auth', () => {
-  it('exchanges an authorization code for tokens', async () => {
+  it('exchanges a JWT for tokens via the jwt-bearer grant', async () => {
     const env = makeClient({ now: () => NOW })
     env.enqueue('/oauth/token', {
       status: 200,
       json: {
         access_token: 'AT',
-        refresh_token: 'RT',
         token_type: 'bearer',
         expires_in: 3600,
-        refresh_token_expires_in: 604800,
         scope: 'TeamMessaging',
         owner_id: '123'
       }
     })
-    const tokens = await env.client.exchangeCodeForToken('code', 'verifier')
+    const tokens = await env.client.exchangeJwtForToken('my-jwt')
     expect(tokens.access_token).toBe('AT')
     expect(tokens.obtainedAt).toBe(NOW)
-    env.client.setTokens(tokens)
     expect(env.client.getTokens()?.access_token).toBe('AT')
     const authCall = env.requests.find((r) => r.url.endsWith('/restapi/oauth/token'))
     expect(authCall).toBeDefined()
-    expect(authCall!.body).toContain('grant_type=authorization_code')
-    expect(authCall!.body).toContain('code=code')
-    expect(authCall!.body).toContain('code_verifier=verifier')
+    expect(authCall!.body).toContain('grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer')
+    expect(authCall!.body).toContain('assertion=my-jwt')
   })
 
   it('throws RingCentralAuthError on 401', async () => {
     const env = makeClient()
     env.enqueue('/oauth/token', { status: 401, json: { error: 'invalid_grant' } })
-    await expect(env.client.exchangeCodeForToken('bad', 'v')).rejects.toBeInstanceOf(
+    await expect(env.client.exchangeJwtForToken('bad')).rejects.toBeInstanceOf(
       RingCentralAuthError
     )
   })
 
-  it('refreshes tokens via refresh_token grant', async () => {
-    const env = makeClient({ now: () => NOW })
-    env.client.setTokens({
-      access_token: 'old',
-      refresh_token: 'rt',
-      token_type: 'bearer',
-      expires_in: 0,
-      refresh_token_expires_in: 604800,
-      obtainedAt: NOW - 10_000
-    })
-    env.enqueue('/oauth/token', {
-      status: 200,
-      json: {
-        access_token: 'newAT',
-        refresh_token: 'newRT',
-        token_type: 'bearer',
-        expires_in: 3600,
-        refresh_token_expires_in: 604800
-      }
-    })
-    const refreshed = await env.client.refreshTokens()
-    expect(refreshed.access_token).toBe('newAT')
-    expect(env.requests[0].body).toContain('grant_type=refresh_token')
-    expect(env.requests[0].body).toContain('refresh_token=rt')
-  })
-
-  it('fires onTokensChanged when tokens are set, refreshed, or revoked', async () => {
+  it('fires onTokensChanged when tokens are set or exchanged', async () => {
     const seen: Array<TokenSet | null> = []
     const limiter = new RateLimiterRegistry({ now: () => NOW, schedule: (fn) => fn() })
     const client = new RingCentralClient({
       server: 'sandbox',
-      clientId: 'cid',
-      redirectUri: 'http://localhost/cb',
+      jwt: 'test-jwt',
       fetch: (vi.fn(async () => makeResponse({ status: 200, json: {} })) as unknown) as typeof fetch,
-      sha256: async (b) => b,
       limiter,
       now: () => NOW,
       onTokensChanged: (t) => seen.push(t)
     })
     const tokens: TokenSet = {
       access_token: 'A',
-      refresh_token: 'R',
       token_type: 'bearer',
       expires_in: 3600,
-      refresh_token_expires_in: 604800,
       obtainedAt: NOW
     }
     client.setTokens(tokens)
     expect(seen).toEqual([tokens])
-    // revoke → null
-    await client.revokeToken()
+    // explicit clear → null
+    client.setTokens(null)
     expect(seen[seen.length - 1]).toBeNull()
   })
 })
@@ -197,25 +161,34 @@ describe('RingCentralClient REST', () => {
     now = 1_700_000_000_000
   })
 
-  function authedClient(marginMs = 60_000) {
-    const env = makeClient({ now: () => now, refreshMarginMs: marginMs })
+  function authedClient() {
+    const env = makeClient({ now: () => now })
     env.client.setTokens({
       access_token: 'AT',
-      refresh_token: 'RT',
       token_type: 'bearer',
       expires_in: 3600,
-      refresh_token_expires_in: 604800,
       obtainedAt: 1_700_000_000_000
     })
     return env
   }
 
-  it('GET /glip/persons/~me with bearer auth', async () => {
+  it('GET /account/~/extension/~ (getMe) with bearer auth, maps to GlipPerson', async () => {
     const env = authedClient()
-    env.enqueue('/glip/persons/~me', { status: 200, json: { id: '111', firstName: 'Me' } })
+    env.enqueue('/account/~/extension/~', {
+      status: 200,
+      json: {
+        id: 111,
+        status: 'Enabled',
+        contact: { firstName: 'Me', lastName: 'Self', email: 'me@example.com' },
+        profileImage: { uri: 'https://example.com/avatar.png' }
+      }
+    })
     const me = await env.client.getMe()
     expect(me.id).toBe('111')
-    expect(env.requests[0].url).toContain('/glip/persons/~me')
+    expect(me.firstName).toBe('Me')
+    expect(me.email).toBe('me@example.com')
+    expect(me.avatar).toBe('https://example.com/avatar.png')
+    expect(env.requests[0].url).toContain('/account/~/extension/~')
     expect(env.requests[0].headers.Authorization).toBe('Bearer AT')
   })
 
@@ -301,50 +274,23 @@ describe('RingCentralClient REST', () => {
     expect(env.requests[0].url).toContain('/glip/chats/c1/read')
   })
 
-  it('proactively refreshes when access token is near expiry', async () => {
-    // access token obtained far in the past relative to `now` => expired.
-    const env = authedClient(60_000)
-    env.client.setTokens({
-      access_token: 'AT',
-      refresh_token: 'RT',
-      token_type: 'bearer',
-      expires_in: 3600,
-      refresh_token_expires_in: 604800,
-      obtainedAt: now - 3_600_000 // expired by 1h
-    })
-    env.enqueue('/oauth/token', {
-      status: 200,
-      json: {
-        access_token: 'freshAT',
-        refresh_token: 'freshRT',
-        token_type: 'bearer',
-        expires_in: 3600,
-        refresh_token_expires_in: 604800
-      }
-    })
-    env.enqueue('/glip/persons/~me', { status: 200, json: { id: 'me' } })
-
-    const me = await env.client.getMe()
-    expect(me.id).toBe('me')
-    // First request = refresh, second = REST call with the new token.
-    expect(env.requests[0].body).toContain('grant_type=refresh_token')
-    expect(env.requests[1].headers.Authorization).toBe('Bearer freshAT')
-  })
-
   it('retries once on 429 then succeeds', async () => {
     const env = authedClient()
     // First REST call returns 429, second returns 200. Both match the same URL.
-    env.enqueue('/glip/persons/~me', { status: 429, json: {}, headers: { 'retry-after': '0' } })
-    env.enqueue('/glip/persons/~me', { status: 200, json: { id: 'me' } })
+    env.enqueue('/account/~/extension/~', { status: 429, json: {}, headers: { 'retry-after': '0' } })
+    env.enqueue('/account/~/extension/~', {
+      status: 200,
+      json: { id: 42, contact: { firstName: 'Me' } }
+    })
     const me = await env.client.getMe()
-    expect(me.id).toBe('me')
-    const restCalls = env.requests.filter((r) => r.url.includes('/glip/persons/~me'))
+    expect(me.id).toBe('42')
+    const restCalls = env.requests.filter((r) => r.url.includes('/account/~/extension/~'))
     expect(restCalls).toHaveLength(2)
   })
 
   it('throws RingCentralError on non-401 failure', async () => {
     const env = authedClient()
-    env.enqueue('/glip/persons/~me', { status: 500, json: { message: 'boom' } })
+    env.enqueue('/account/~/extension/~', { status: 500, json: { message: 'boom' } })
     await expect(env.client.getMe()).rejects.toBeInstanceOf(RingCentralError)
   })
 })

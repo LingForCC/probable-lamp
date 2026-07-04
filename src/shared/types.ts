@@ -123,13 +123,10 @@ export interface RealtimeEnvelope {
 
 export interface TokenSet {
   access_token: string
-  refresh_token: string
   token_type: string
   expires_in: number
-  refresh_token_expires_in: number
   scope?: string
   owner_id?: string
-  endpoint_id?: string
   /** epoch ms when access_token was stored (for expiry calc) */
   obtainedAt: number
 }
@@ -138,7 +135,8 @@ export interface ServerConfig {
   server: 'sandbox' | 'production'
   apiMode: 'mock' | 'real'
   clientId?: string
-  redirectUri?: string
+  /** Long-lived RingCentral JWT used to mint access tokens via the jwt-bearer grant. */
+  jwt?: string
 }
 
 // ─── IPC contract ─────────────────────────────────────────────────────────────

@@ -15,7 +15,6 @@ import {
 } from './ringcentral.js'
 import { RingCentralSocket, type WebSocketFactory } from './websocket.js'
 import type { RateLimiterRegistry } from './rateLimiter.js'
-import type { Sha256 } from './pkce.js'
 
 export interface ClientFactoryResult {
   client: IMessagingClient
@@ -28,12 +27,11 @@ export interface ClientFactoryOptions {
   server: ServerEnv
   clientId?: string
   clientSecret?: string
-  redirectUri?: string
+  /** Long-lived RingCentral JWT used to mint access tokens. Required for real mode. */
+  jwt?: string
   limiter: RateLimiterRegistry
   /** Only required for real mode. */
   createSocket?: WebSocketFactory
-  /** Only required for real mode (PKCE code_challenge). */
-  sha256?: Sha256
   /** fetch override (tests). Defaults to global fetch. */
   fetch?: typeof fetch
   /** Called whenever the real client's token set changes (re-persist to store). */
@@ -52,19 +50,16 @@ export function createClients(opts: ClientFactoryOptions): ClientFactoryResult {
     return { client: mock, realtime: mock, isMock: true }
   }
 
-  if (!opts.clientId || !opts.redirectUri || !opts.createSocket || !opts.sha256) {
-    throw new Error(
-      'Real API mode requires clientId, redirectUri, createSocket, and sha256.'
-    )
+  if (!opts.jwt || !opts.createSocket) {
+    throw new Error('Real API mode requires jwt and createSocket.')
   }
 
   const client = new RingCentralClient({
     server: opts.server,
+    jwt: opts.jwt,
     clientId: opts.clientId,
     clientSecret: opts.clientSecret,
-    redirectUri: opts.redirectUri,
     limiter: opts.limiter,
-    sha256: opts.sha256,
     fetch: opts.fetch,
     onTokensChanged: opts.onTokensChanged
   })
@@ -72,13 +67,10 @@ export function createClients(opts: ClientFactoryOptions): ClientFactoryResult {
   const realtime = new RingCentralSocket({
     createSocket: opts.createSocket,
     getToken: () => client.getTokens()?.access_token ?? null,
-    refreshToken: async () => {
-      try {
-        return (await client.refreshTokens()).access_token
-      } catch {
-        return null
-      }
-    },
+    // JWTs are not refreshable; if the access token is missing we cannot mint
+    // a new one here. In practice this never fires because the JWT is exchanged
+    // at startup, before the socket connects.
+    refreshToken: async () => null,
     onReconnect: opts.onReconnect
   })
 
