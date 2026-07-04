@@ -23,6 +23,7 @@ import type {
 } from '../shared/types.js'
 import { IPC } from '../shared/types.js'
 import type { AppStore } from './store.js'
+import type { CacheStore } from './cacheStore.js'
 import type { AuthController } from './auth.js'
 import { shouldNotify, showPostNotification } from './notifications.js'
 
@@ -30,6 +31,8 @@ export interface IpcDeps {
   client: IMessagingClient
   realtime: RealtimeSubscription
   store: AppStore
+  /** Offline history cache (per-chat JSON under userData/cache). */
+  cache: CacheStore
   auth: AuthController
   config: ServerConfig
   /** Get the currently focused window (may be null). */
@@ -52,7 +55,7 @@ export class IpcController {
   }
 
   private registerAll(): void {
-    const { client, store, config } = this.deps
+    const { client, store, cache, config } = this.deps
 
     ipcMain.handle(IPC.GET_CONFIG, () => ({
       // `server`/`apiMode` come from the resolved (env-driven) config; `theme`
@@ -74,6 +77,7 @@ export class IpcController {
         await this.deps.realtime.stop()
       } finally {
         store.clearTokens()
+        cache.clear()
         client.setTokens(null)
         this.me = null
         this.broadcast(IPC.AUTH_STATE_CHANGED, { status: 'loggedOut' } satisfies AuthState)
@@ -90,12 +94,25 @@ export class IpcController {
 
     ipcMain.handle(IPC.GET_ME, async () => {
       if (!this.me) this.me = await client.getMe()
+      cache.writeMe(this.me)
       return this.me
     })
 
     ipcMain.handle(IPC.GET_READ_STATES, () => store.getReadStates())
 
-    ipcMain.handle(IPC.LIST_RECENT_CHATS, () => client.listRecentChats())
+    // Offline history cache reads (return empty/null when cold or corrupt).
+    ipcMain.handle(IPC.GET_CACHED_ME, () => cache.readIndex()?.me ?? null)
+    ipcMain.handle(IPC.GET_CACHED_CHATS, () => cache.readIndex()?.chats ?? [])
+    ipcMain.handle(IPC.GET_CACHED_POSTS, (_e, chatId: string) => {
+      const file = cache.readPosts(chatId)
+      return { posts: file?.posts ?? [], nextPageToken: file?.nextPageToken }
+    })
+
+    ipcMain.handle(IPC.LIST_RECENT_CHATS, async () => {
+      const resp = await client.listRecentChats()
+      cache.writeChats(resp.records)
+      return resp
+    })
     ipcMain.handle(IPC.LIST_TEAMS, () => client.listTeams())
     ipcMain.handle(IPC.GET_TEAM, (_e, chatId: string) => client.getTeam(chatId))
     ipcMain.handle(
@@ -105,12 +122,25 @@ export class IpcController {
     )
     ipcMain.handle(
       IPC.LIST_POSTS,
-      (_e, args: { chatId: string; pageToken?: string; recordCount?: number }) =>
-        client.listPosts(args.chatId, { pageToken: args.pageToken, recordCount: args.recordCount })
+      async (
+        _e,
+        args: { chatId: string; pageToken?: string; recordCount?: number; cache?: boolean }
+      ) => {
+        const resp = await client.listPosts(args.chatId, {
+          pageToken: args.pageToken,
+          recordCount: args.recordCount
+        })
+        // Write-through unless the caller opted out (the unread reconcile pages
+        // through history for counting only and must not churn the disk).
+        if (args.cache !== false) {
+          cache.writePosts(args.chatId, resp.records, resp.nextPageToken)
+        }
+        return resp
+      }
     )
     ipcMain.handle(
       IPC.SEND_POST,
-      (
+      async (
         _e,
         args: {
           chatId: string
@@ -118,20 +148,29 @@ export class IpcController {
           mentions?: GlipMention[]
           attachments?: GlipAttachment[]
         }
-      ) =>
-        client.sendPost(args.chatId, args.text, {
+      ) => {
+        const created = await client.sendPost(args.chatId, args.text, {
           mentions: args.mentions,
           attachments: args.attachments
         })
+        cache.upsertPost(args.chatId, created)
+        return created
+      }
     )
     ipcMain.handle(
       IPC.EDIT_POST,
-      (_e, args: { chatId: string; postId: string; text: string }) =>
-        client.editPost(args.chatId, args.postId, args.text)
+      async (_e, args: { chatId: string; postId: string; text: string }) => {
+        const updated = await client.editPost(args.chatId, args.postId, args.text)
+        cache.patchPost(args.chatId, updated)
+        return updated
+      }
     )
     ipcMain.handle(
       IPC.DELETE_POST,
-      (_e, args: { chatId: string; postId: string }) => client.deletePost(args.chatId, args.postId)
+      async (_e, args: { chatId: string; postId: string }) => {
+        await client.deletePost(args.chatId, args.postId)
+        cache.removePost(args.chatId, args.postId)
+      }
     )
     ipcMain.handle(
       IPC.UPLOAD_FILE,
@@ -195,6 +234,7 @@ export class IpcController {
     this.deps.realtime.onRealtime((envelope: RealtimeEnvelope) => {
       this.broadcast(IPC.REALTIME_EVENT, envelope)
       this.maybeNotify(envelope)
+      this.cacheRealtimePost(envelope)
     })
     // Forward typing indicators to the renderer so the UI can show "X is typing…".
     this.deps.realtime.onTyping((payload) => {
@@ -212,6 +252,26 @@ export class IpcController {
     if (!shouldNotify(postEvent, this.me, focused)) return
     const sender = this.deps.resolvePerson?.(postEvent.creatorId ?? '') ?? null
     showPostNotification(postEvent, 'Chat', sender)
+  }
+
+  /**
+   * Mirror realtime PostAdded/Updated/Removed into the offline cache so it
+   * stays consistent without waiting for the next listPosts. Best-effort: a
+   * missed write only means a slightly stale cache until the next fetch.
+   */
+  private cacheRealtimePost(envelope: RealtimeEnvelope): void {
+    const body = envelope.body
+    if (!body || typeof body !== 'object') return
+    const event = body as { eventType?: string } & Partial<PostEventBody>
+    // Realtime PostEvent bodies key the chat via `groupId` (same field as the
+    // REST `GlipPost.groupId`).
+    const chatId = event.groupId
+    if (!event.eventType || !chatId) return
+    if (event.eventType === 'PostAdded' || event.eventType === 'PostUpdated') {
+      this.deps.cache.upsertPost(chatId, event as PostEventBody)
+    } else if (event.eventType === 'PostRemoved') {
+      if (event.id) this.deps.cache.removePost(chatId, event.id)
+    }
   }
 
   private broadcast(channel: (typeof IPCType)[keyof typeof IPCType], payload: unknown): void {

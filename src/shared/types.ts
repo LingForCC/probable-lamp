@@ -154,6 +154,11 @@ export const IPC = {
   GET_AUTH_STATE: 'auth:get-state',
   GET_ME: 'rc:get-me',
   GET_READ_STATES: 'app:get-read-states',
+  // Offline history cache (read-back). Write-through happens on the data
+  // handlers below + realtime forwarding; these channels only serve cache hits.
+  GET_CACHED_ME: 'rc:get-cached-me',
+  GET_CACHED_CHATS: 'rc:get-cached-chats',
+  GET_CACHED_POSTS: 'rc:get-cached-posts',
   LIST_RECENT_CHATS: 'rc:list-recent-chats',
   LIST_TEAMS: 'rc:list-teams',
   CREATE_TEAM: 'rc:create-team',

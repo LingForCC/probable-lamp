@@ -45,7 +45,7 @@ credentials and no network.
 
 | Layer | Path | Responsibility |
 | --- | --- | --- |
-| **Main** | `src/main/` | App lifecycle, window, JWT auth, IPC handlers, notifications, encrypted token store. Node APIs live here. |
+| **Main** | `src/main/` | App lifecycle, window, JWT auth, IPC handlers, notifications, encrypted token store, offline history cache (`cacheStore`). Node APIs live here. |
 | **Preload** | `src/preload/` | A typed `window.rcm` bridge via `contextBridge`. Strict allow-list of IPC invokers + push subscribers. **No Node is exposed to the renderer.** |
 | **Renderer** | `src/renderer/` | React UI + `zustand` store. Talks to the world only through `window.rcm`. |
 
@@ -132,6 +132,21 @@ createClients(opts) ──► mock   ? MockMessagingClient  (in-memory; doubles 
    `REALTIME_RECONCILED` push that triggers `store.reconcileUnread`. This keeps unread
    correct across restarts, sleeps, and network drops with no reliance on the server
    value.
+7. **Offline history cache.** Chats, the current user, and per-chat posts are
+   mirrored to disk as per-chat JSON under `<userData>/message-cache/`
+   (`CacheStore`), so the app renders instantly on cold start and shows recent
+   history while offline. Write-through happens in the IPC layer on every
+   `LIST_RECENT_CHATS` / `GET_ME` / `LIST_POSTS` fetch and on realtime
+   `PostAdded`/`PostUpdated`/`PostRemoved`; send/edit/delete mirror too. The
+   cache is capped at the newest 500 posts per chat and is **cleared on
+   explicit logout** (it survives restarts, sleeps, and token re-exchange).
+   Plaintext — same trust boundary as the watermark previews already in the
+   sidebar; a future option is `safeStorage` encryption at rest. The directory
+   is named `message-cache` (not `cache`) to avoid colliding with Chromium's
+   reserved `<userData>/Cache/` on case-insensitive filesystems. **The cache is
+   strictly subservient to the unread logic:** `countUnreadViaPages` passes
+   `cache: false` so the watermark recount never churns the disk, and `unread`
+   remains governed solely by decision #6.
 
 ## Testing strategy
 

@@ -15,6 +15,34 @@ an optional `name`, the other `person` for direct chats, a `lastMessage` preview
 `lastModifiedTime`, and `membersCount`. (The server also returns an `unreadCount`
 field — it is **ignored**. See "Unread (local)" below.)
 
+### Offline history cache
+
+The chat list, the current user, and per-chat posts are mirrored to disk as
+per-chat JSON under `<userData>/message-cache/` (`CacheStore`), so the sidebar
+and an opened chat render **instantly on cold start** and remain viewable
+offline. (Named `message-cache`, not `cache`, to avoid colliding with
+Chromium's reserved `<userData>/Cache/` HTTP-cache directory on
+case-insensitive filesystems.)
+
+- **Write-through** happens in the IPC layer on every `listRecentChats` /
+  `getMe` / `listPosts` fetch and on realtime `PostAdded`/`PostUpdated`/
+  `PostRemoved`; `sendPost` / `editPost` / `deletePost` mirror too.
+- **Read-back** is cache-first: `init`/`doLogin` seed `me` + `chats` from disk
+  before the network resolves, and `selectChat` renders cached posts immediately
+  then refreshes page 1 once in the background (tracked by a `hydrated` flag so
+  it doesn't re-fetch on every re-select).
+- **Retention:** capped at the newest **500 posts per chat** (FIFO eviction of
+  oldest); older history is always re-fetchable via "load more".
+- **Clear policy:** the cache survives restarts, sleeps, and token re-exchange,
+  and is **wiped on explicit logout** (alongside tokens).
+- Plaintext — same trust boundary as the watermark previews already shown in the
+  sidebar. A future option is `safeStorage` encryption at rest.
+
+> The cache is strictly **subservient** to the unread logic below: the
+> watermark-based recount passes `cache: false` so counting never churns the
+> disk, and `unread` is governed solely by the watermarks — never by what
+> happens to be cached.
+
 ## Unread (local, watermark-based)
 
 Unread counts are computed and maintained **entirely client-side**; the server's
@@ -32,18 +60,21 @@ Unread counts are computed and maintained **entirely client-side**; the server's
    `lastReadTime[chatId] = chat.lastModifiedTime` for every chat → 0 unread, so
    history isn't shown as unread. (In MOCK mode, demo watermarks are seeded
    instead so the seeded chats display their classic unread badges.)
-2. **Cold start** (watermarks persisted, app was closed): for each chat where
+2. **Cold start** (watermarks persisted, app was closed): the sidebar renders
+   instantly from the offline cache (if any), then for each chat where
    `lastModifiedTime > lastReadTime[chatId]`, page back through recent posts
    (page size 500, newest-first) until a post at or before the watermark is hit,
    counting non-own messages newer than the watermark. Runs in the background
    after the sidebar renders; badges fill in per-chat as each fetch completes
    (concurrency capped at 5). Chats with no new activity stay at 0 with zero
-   requests. A safety-valve (20 pages) guards against pathological data.
+   requests. A safety-valve (20 pages) guards against pathological data. The
+   recount passes `cache: false` so it never churns the offline cache.
 3. **Warm realtime** (`PostAdded`): inactive chat → `unread += 1`; active chat →
    advance the watermark to the new post and stay at 0.
 4. **Select a chat** (`selectChat`): clear `unread`, advance the watermark to the
    newest visible message, and call `markChatRead` (server best-effort + persists
-   the watermark via the IPC layer).
+   the watermark via the IPC layer). Cached posts render first; a one-time
+   background refresh merges in anything newer.
 5. **Send a message** (`sendText`): own message in the active chat → advance the
    watermark so it's never counted as unread.
 6. **App open but interrupted** (machine asleep / network dropped): realtime

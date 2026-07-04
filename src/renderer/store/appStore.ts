@@ -24,6 +24,13 @@ export interface ChatMessages {
   /** tokens not yet loaded (older history) */
   hasMore: boolean
   loadingMore: boolean
+  /**
+   * False when the messages were seeded from the offline cache and not yet
+   * refreshed from the network this session. Drives a one-time background
+   * refresh so cached posts render instantly but still reconcile with the
+   * server. Flips to true after the first successful network fetch.
+   */
+  hydrated: boolean
 }
 
 export interface AppState {
@@ -113,18 +120,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const [config, auth] = await Promise.all([api.getConfig(), api.getAuthState()])
       set({ config: { ...config, theme: (config as { theme?: 'light' | 'dark' | 'system' }).theme } })
       if (auth.status === 'loggedIn') {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
-        const people = collectPeople(chatsResp.records)
-        const readStates = await api.getReadStates()
-        set({
-          auth,
-          me: me,
-          chats: chatsResp.records,
-          people,
-          ...seedReadStatesAndUnread(chatsResp.records, readStates, config.apiMode)
-        })
-        // Reconcile unread for chats with activity since the persisted watermark.
-        void reconcileUnreadForAll(api, chatsResp.records, get, set)
+        // Render from the offline cache instantly (if present), then refresh
+        // from the network + reconcile unread in the background.
+        await seedFromCache(api, set, config.apiMode)
+        void loadChatsMeAndReconcile(api, auth, get, set, config.apiMode)
       } else {
         set({ auth })
       }
@@ -140,16 +139,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const auth = await api.login()
       set({ auth })
       if (auth.status === 'loggedIn') {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
-        const readStates = await api.getReadStates()
         const apiMode = get().config?.apiMode
-        set({
-          me,
-          chats: chatsResp.records,
-          people: collectPeople(chatsResp.records),
-          ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
-        })
-        void reconcileUnreadForAll(api, chatsResp.records, get, set)
+        await seedFromCache(api, set, apiMode)
+        await loadChatsMeAndReconcile(api, auth, get, set, apiMode)
       }
     } catch (e) {
       set({ auth: { status: 'error', message: errMsg(e) }, error: errMsg(e) })
@@ -181,7 +173,36 @@ export const useAppStore = create<AppState>((set, get) => ({
       // already loaded; just mark read (advances watermark, clears unread)
       markChatReadLocally(chatId, set)
       void api.markChatRead(chatId).catch(() => {})
+      // If these posts came from the cache and haven't been refreshed this
+      // session, fetch the latest page once in the background.
+      if (!existing.hydrated) void refreshChatFromNetwork(api, chatId, get, set)
       return
+    }
+    // Not in memory → try the offline cache so the chat renders instantly.
+    try {
+      const cached = await api.getCachedPosts(chatId)
+      if (cached.posts.length > 0) {
+        nextPageTokens[chatId] = cached.nextPageToken
+        set((state) => ({
+          messages: {
+            ...state.messages,
+            [chatId]: {
+              posts: cached.posts,
+              hasMore: Boolean(cached.nextPageToken),
+              loadingMore: false,
+              hydrated: false
+            }
+          }
+        }))
+        set((state) => ({ unread: { ...state.unread, [chatId]: 0 } }))
+        markChatReadLocally(chatId, set)
+        void api.markChatRead(chatId).catch(() => {})
+        // Refresh from the network once, in the background.
+        void refreshChatFromNetwork(api, chatId, get, set)
+        return
+      }
+    } catch {
+      // cache read failed (e.g. corrupt file) → fall through to the network
     }
     try {
       const resp = await api.listPosts({ chatId })
@@ -192,7 +213,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           [chatId]: {
             posts: resp.records,
             hasMore: Boolean(resp.nextPageToken),
-            loadingMore: false
+            loadingMore: false,
+            hydrated: true
           }
         }
       }))
@@ -261,7 +283,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             [chatId]: {
               posts: dedupe([...resp.records, ...(cur?.posts ?? [])]),
               hasMore: Boolean(resp.nextPageToken),
-              loadingMore: false
+              loadingMore: false,
+              hydrated: true
             }
           }
         }
@@ -444,16 +467,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (state.status === 'loggedIn') {
       set({ auth: state })
       try {
-        const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
-        const readStates = await api.getReadStates()
         const apiMode = get().config?.apiMode
-        set({
-          me,
-          chats: chatsResp.records,
-          people: collectPeople(chatsResp.records),
-          ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
-        })
-        void reconcileUnreadForAll(api, chatsResp.records, get, set)
+        await seedFromCache(api, set, apiMode)
+        await loadChatsMeAndReconcile(api, state, get, set, apiMode)
       } catch (e) {
         set({ error: errMsg(e) })
       }
@@ -533,6 +549,106 @@ function markChatReadLocally(
     unread: { ...state.unread, [chatId]: 0 },
     readStates: { ...state.readStates, [chatId]: at }
   }))
+}
+
+/**
+ * Seed the sidebar from the offline cache (if any) so it renders instantly on
+ * cold start. Reads the cached `me` + chat list and the persisted watermarks,
+ * and seeds `unread`/`readStates` exactly as the network path does — so the
+ * watermark logic remains the single source of truth for unread. No-op when
+ * the cache is empty (first run); the caller's network fetch then drives the UI.
+ */
+async function seedFromCache(
+  api: RcmApi,
+  set: SetState,
+  apiMode: 'mock' | 'real' | undefined
+): Promise<void> {
+  try {
+    const [cachedMe, cachedChats] = await Promise.all([api.getCachedMe(), api.getCachedChats()])
+    if (!cachedChats.length) return
+    const readStates = await api.getReadStates()
+    set({
+      me: cachedMe,
+      chats: cachedChats,
+      people: collectPeople(cachedChats),
+      ...seedReadStatesAndUnread(cachedChats, readStates, apiMode)
+    })
+  } catch {
+    // cache read failed → fall back to the network path
+  }
+}
+
+/**
+ * Fetch the current user + fresh chat list from the network, update the store,
+ * and run the watermark-based unread reconcile. Used by init/doLogin/
+ * applyAuthState after the optional cache seed. `auth` is set alongside so the
+ * UI reflects the logged-in state even if the cache was empty.
+ */
+async function loadChatsMeAndReconcile(
+  api: RcmApi,
+  auth: AuthState,
+  get: GetState,
+  set: SetState,
+  apiMode: 'mock' | 'real' | undefined
+): Promise<void> {
+  const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
+  const readStates = await api.getReadStates()
+  set({
+    auth,
+    me,
+    chats: chatsResp.records,
+    people: collectPeople(chatsResp.records),
+    ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
+  })
+  // Reconcile unread for chats with activity since the persisted watermark.
+  void reconcileUnreadForAll(api, chatsResp.records, get, set)
+}
+
+/**
+ * Refresh a single chat's first page from the network and merge with whatever
+ * is currently rendered (cached or stale). Flips `hydrated` to true so the
+ * chat isn't re-fetched again this session. Best-effort: on failure the cached
+ * posts stay visible. If still active, advances the watermark for any new posts
+ * (mirrors the active-chat rule in `applyRealtime` PostAdded).
+ */
+async function refreshChatFromNetwork(
+  api: RcmApi,
+  chatId: string,
+  get: GetState,
+  set: SetState
+): Promise<void> {
+  try {
+    const resp = await api.listPosts({ chatId })
+    nextPageTokens[chatId] = resp.nextPageToken
+    set((state) => {
+      const cur = state.messages[chatId]
+      return {
+        messages: {
+          ...state.messages,
+          [chatId]: {
+            posts: dedupe([...resp.records, ...(cur?.posts ?? [])]),
+            hasMore: Boolean(resp.nextPageToken),
+            loadingMore: false,
+            hydrated: true
+          }
+        }
+      }
+    })
+    if (get().activeChatId === chatId) {
+      // Newest visible post advances the watermark (server-side mark is
+      // best-effort; the IPC layer persists it).
+      const newest = resp.records[0]?.creationTime
+      markChatReadLocally(chatId, set, newest ?? new Date().toISOString())
+      void api.markChatRead(chatId).catch(() => {})
+    }
+  } catch {
+    // Leave cached posts visible; mark hydrated so we don't retry every select.
+    set((state) => {
+      const cur = state.messages[chatId]
+      if (!cur) return state
+      return { messages: { ...state.messages, [chatId]: { ...cur, hydrated: true } } }
+    })
+  }
 }
 
 /**
@@ -647,7 +763,9 @@ async function countUnreadViaPages(
   let total = 0
   let pageToken: string | undefined
   for (let i = 0; i < MAX_PAGES; i++) {
-    const resp = await api.listPosts({ chatId, pageToken, recordCount: PAGE_SIZE })
+    // cache: false — reconcile pages through history only to count; it must
+    // not churn the offline cache (which is write-through on user-driven loads).
+    const resp = await api.listPosts({ chatId, pageToken, recordCount: PAGE_SIZE, cache: false })
     let reachedWatermark = false
     for (const p of resp.records) {
       if (p.creationTime <= watermark) {
@@ -669,7 +787,7 @@ function appendPost(state: AppState, chatId: string, post: GlipPost): Partial<Ap
       ...state.messages,
       [chatId]: existing
         ? { ...existing, posts: dedupe([...existing.posts, post]) }
-        : { posts: [post], hasMore: false, loadingMore: false }
+        : { posts: [post], hasMore: false, loadingMore: false, hydrated: false }
     }
   }
 }

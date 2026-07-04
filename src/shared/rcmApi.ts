@@ -31,6 +31,22 @@ export interface RcmApi {
    * counts locally without trusting the server's `unreadCount`.
    */
   getReadStates: () => Promise<Record<string, string>>
+  /**
+   * Cached current user from disk (null if the cache is empty/cold). Used to
+   * render the sidebar instantly on cold start before the network resolves.
+   */
+  getCachedMe: () => Promise<GlipPerson | null>
+  /**
+   * Cached chat list from disk (empty if cold). Rendered instantly on cold
+   * start; the network refresh that follows overwrites it.
+   */
+  getCachedChats: () => Promise<GlipChat[]>
+  /**
+   * Cached posts for a chat (empty if cold). Returned in newest-first order,
+   * capped at 500. Rendered instantly on chat open; a background network
+   * refresh merges in any newer posts.
+   */
+  getCachedPosts: (chatId: string) => Promise<{ posts: GlipPost[]; nextPageToken?: string }>
   listRecentChats: () => Promise<PageResult<GlipChat>>
   listTeams: () => Promise<GlipTeam[]>
   getTeam: (chatId: string) => Promise<GlipTeam>
@@ -39,6 +55,12 @@ export interface RcmApi {
     chatId: string
     pageToken?: string
     recordCount?: number
+    /**
+     * When false, the fetched page is NOT written to the offline cache. Used
+     * by the unread reconcile (which pages through history for counting only)
+     * so counting never churns the disk. Defaults to true (write-through).
+     */
+    cache?: boolean
   }) => Promise<PageResult<GlipPost>>
   sendPost: (args: {
     chatId: string

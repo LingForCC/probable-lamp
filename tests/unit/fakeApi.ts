@@ -24,6 +24,14 @@ export function createFakeApi(opts: {
   posts?: Record<string, GlipPost[]>
   /** Injected read-state watermarks (chatId -> ISO). Defaults to empty. */
   readStates?: Record<string, string>
+  /**
+   * Offline cache contents. When provided, `init`/`doLogin`/`applyAuthState`
+   * seed the sidebar from these before hitting the network, and `selectChat`
+   * renders cached posts instantly. Defaults to empty (cold cache).
+   */
+  cachedMe?: GlipPerson | null
+  cachedChats?: GlipChat[]
+  cachedPosts?: Record<string, { posts: GlipPost[]; nextPageToken?: string }>
 }): RcmApi & {
   emit: (env: RealtimeEnvelope) => void
   emitTyping: (p: TypingPayload) => void
@@ -75,6 +83,19 @@ export function createFakeApi(opts: {
     getReadStates: async (): Promise<Record<string, string>> => {
       record('getReadStates', [])
       return { ...(opts.readStates ?? {}) }
+    },
+    getCachedMe: async (): Promise<GlipPerson | null> => {
+      record('getCachedMe', [])
+      return opts.cachedMe === undefined ? null : opts.cachedMe
+    },
+    getCachedChats: async (): Promise<GlipChat[]> => {
+      record('getCachedChats', [])
+      return [...(opts.cachedChats ?? [])]
+    },
+    getCachedPosts: async (chatId: string): Promise<{ posts: GlipPost[]; nextPageToken?: string }> => {
+      record('getCachedPosts', [chatId])
+      const entry = opts.cachedPosts?.[chatId]
+      return entry ? { posts: [...entry.posts], nextPageToken: entry.nextPageToken } : { posts: [] }
     },
     listRecentChats: async (): Promise<PageResult<GlipChat>> => {
       record('listRecentChats', [])

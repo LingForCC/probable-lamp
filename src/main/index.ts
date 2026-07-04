@@ -11,6 +11,7 @@ import { app, BrowserWindow, powerMonitor } from 'electron'
 import WebSocket from 'ws'
 import { loadConfig } from './config.js'
 import { AppStore } from './store.js'
+import { CacheStore } from './cacheStore.js'
 import { AuthController } from './auth.js'
 import { IpcController } from './ipc.js'
 import { createMainWindow } from './window.js'
@@ -44,6 +45,9 @@ app.whenReady().then(async () => {
   }
 
   const limiter = new RateLimiterRegistry()
+  // Offline history cache (per-chat JSON under userData/cache). Survives
+  // restarts and wake; cleared on explicit logout.
+  const cache = new CacheStore()
   // Holder so the socket's onReconnect callback (registered during client
   // construction, before the IpcController exists) can reach the controller.
   const controllerRef: { current: IpcController | null } = { current: null }
@@ -81,6 +85,7 @@ app.whenReady().then(async () => {
     client,
     realtime,
     store,
+    cache,
     auth,
     config: resolvedConfig,
     getFocusedWindow: () => BrowserWindow.getFocusedWindow()

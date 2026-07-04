@@ -89,7 +89,7 @@ describe('appStore chat selection + pagination', () => {
     // Force a scenario with a next page.
     const s1 = useAppStore.getState()
     useAppStore.setState({
-      messages: { c1: { posts: s1.messages['c1']!.posts.slice(0, 2), hasMore: true, loadingMore: false } }
+      messages: { c1: { posts: s1.messages['c1']!.posts.slice(0, 2), hasMore: true, loadingMore: false, hydrated: true } }
     })
     await useAppStore.getState().loadMoreMessages(api)
     const s2 = useAppStore.getState()
@@ -438,5 +438,108 @@ describe('appStore unread reconciliation (local watermark)', () => {
     const s = useAppStore.getState()
     expect(s.unread['c2']).toBe(5) // preserved
     expect(s.unread['c3'] ?? 0).toBe(0) // new chat defaults to 0
+  })
+})
+
+describe('appStore offline cache seeding', () => {
+  beforeEach(freshStore)
+
+  it('doLogin seeds the sidebar from the cache before the network resolves', async () => {
+    // Network chats differ from cached chats; both should be loaded, with the
+    // network value winning once doLogin settles.
+    const api = createFakeApi({
+      chats: [{ id: 'net', type: 'Team', name: 'From Network' }],
+      me,
+      cachedMe: me,
+      cachedChats: [{ id: 'cache', type: 'Team', name: 'From Cache' }]
+    })
+    await useAppStore.getState().doLogin(api)
+    const s = useAppStore.getState()
+    // getCachedChats was consulted (cache-first render path).
+    expect(api.calls.getCachedChats).toHaveLength(1)
+    expect(api.calls.getCachedMe).toHaveLength(1)
+    // After settling, the network chats win.
+    expect(s.chats.map((c) => c.id)).toEqual(['net'])
+    expect(s.me?.id).toBe('me')
+  })
+
+  it('doLogin with an empty cache falls back to the network-only path', async () => {
+    const api = createFakeApi({ chats, me }) // no cached* provided → cold
+    await useAppStore.getState().doLogin(api)
+    expect(api.calls.getCachedChats).toHaveLength(1) // still consulted
+    expect(useAppStore.getState().chats).toHaveLength(2) // network result
+  })
+
+  it('selectChat renders cached posts instantly, then refreshes from network once', async () => {
+    // Cached posts exist for c1; the network returns a newer post on page 1.
+    const cachedPost: GlipPost = {
+      id: 'cached-1',
+      groupId: 'c1',
+      text: 'from cache',
+      creatorId: 'u1',
+      creationTime: '2024-01-01T00:00:00Z'
+    }
+    const netPost: GlipPost = {
+      id: 'net-1',
+      groupId: 'c1',
+      text: 'from network',
+      creatorId: 'u1',
+      creationTime: '2024-01-02T00:00:00Z'
+    }
+    const api = createFakeApi({
+      chats,
+      me,
+      posts: { c1: [netPost] },
+      cachedPosts: { c1: { posts: [cachedPost] } },
+      readStates: { c1: '2023-01-01T00:00:00Z' }
+    })
+    await useAppStore.getState().doLogin(api)
+    await useAppStore.getState().selectChat(api, 'c1')
+
+    // After settle: both posts merged (cache + network), deduped, newest-first.
+    const msgs = useAppStore.getState().messages['c1']!
+    expect(msgs.posts.map((p) => p.id)).toEqual(['net-1', 'cached-1'])
+    // The cache read happened, and exactly one network listPosts fired.
+    expect(api.calls.getCachedPosts).toHaveLength(1)
+    const listPostsCalls = api.calls.listPosts ?? []
+    expect(listPostsCalls).toHaveLength(1)
+    // Hydrated flag flipped to true after the background refresh.
+    expect(msgs.hydrated).toBe(true)
+  })
+
+  it('selectChat does not re-fetch when re-selecting an already-hydrated chat', async () => {
+    const api = createFakeApi({
+      chats,
+      me,
+      posts: { c1: [{ id: 'p1', groupId: 'c1', text: 'hi', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }] }
+    })
+    await useAppStore.getState().doLogin(api)
+    await useAppStore.getState().selectChat(api, 'c1')
+    const callsAfterFirst = (api.calls.listPosts ?? []).length
+    // Re-select the same chat — it's already hydrated, so no new fetch.
+    await useAppStore.getState().selectChat(api, 'c1')
+    expect((api.calls.listPosts ?? []).length).toBe(callsAfterFirst)
+  })
+
+  it('reconcile still pages the network with cache:false (does not depend on cache)', async () => {
+    // Regression guard: the watermark-based recount must remain correct even
+    // with a populated cache, and must not be short-circuited by cached posts.
+    const watermark = '2024-01-01T00:00:00Z'
+    const posts: GlipPost[] = [
+      { id: 'old', groupId: 'c2', text: 'old', creatorId: 'u1', creationTime: '2023-12-31T23:00:00Z' },
+      { id: 'new1', groupId: 'c2', text: 'new1', creatorId: 'u1', creationTime: '2024-01-01T00:01:00Z' },
+      { id: 'new2', groupId: 'c2', text: 'new2', creatorId: 'u1', creationTime: '2024-01-01T00:02:00Z' }
+    ]
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:02:00Z' }],
+      me,
+      posts: { c2: posts },
+      readStates: { c2: watermark },
+      cachedPosts: { c2: { posts: [posts[0]] } } // stale cache present
+    })
+    await useAppStore.getState().doLogin(api)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(useAppStore.getState().unread['c2']).toBe(2) // new1 + new2
   })
 })
