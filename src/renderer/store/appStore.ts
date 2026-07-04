@@ -355,9 +355,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   applyRealtime(envelope) {
-    const body = envelope.body as { eventType?: string } & Partial<GlipPost>
+    const body = envelope.body as { eventType?: string; chatId?: string } & Partial<GlipPost>
     if (!body || !body.eventType) return
-    const chatId = body.groupId ?? ''
+    // The TM REST API keys posts by `chatId`; realtime PostAdded bodies use
+    // `groupId`. Accept either so routing works regardless of source. (The WS
+    // client also normalizes, but defend in depth for the mock / other sources.)
+    const chatId = body.groupId ?? body.chatId ?? ''
     if (body.eventType === 'PostAdded') {
       const post = body as GlipPost & { eventType: 'PostAdded' }
       set((state) => {

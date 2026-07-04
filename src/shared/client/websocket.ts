@@ -13,7 +13,7 @@
  * unit-tested with an in-memory fake socket and fake timers.
  *
  * The connection URL carries the bearer token, per RC's token-authenticated WS:
- *   wss://ws-api.ringcentral.com?token=<access_token>
+ *   wss://ws-api.ringcentral.com/ws?token=<access_token>
  *
  * NOTE: The official SDK negotiates a short-lived WS token, but RC also accepts
  * the access token directly for app-level connections. For robustness we refresh
@@ -89,7 +89,6 @@ interface SubscribeMessage {
   message: {
     type?: 'Subscribe' | 'Unsubscribe' | 'Renew' | 'Pong'
     eventFilters: string[]
-    deliveryMode?: { transportType: 'WebSocket' }
     sessionRecovery?: { sequenceId?: number }
   }
 }
@@ -279,6 +278,15 @@ export class RingCentralSocket implements RealtimeSubscription {
       return
     }
 
+    // RingCentral's WebSocket gateway delivers notifications in two shapes:
+    //   1. a bare notification object (legacy / test fixtures), or
+    //   2. a 2-element array [metadata, notification] (current production).
+    // Normalize both to a single notification object.
+    if (Array.isArray(parsed)) {
+      if (parsed.length < 2 || !isNotification(parsed[1])) return
+      parsed = parsed[1]
+    }
+
     if (isNotification(parsed)) {
       // A pong can arrive as a notification with no sequenceId; treat no-event
       // payloads as keepalives only.
@@ -301,6 +309,13 @@ export class RingCentralSocket implements RealtimeSubscription {
         return
       }
 
+      // Normalize `chatId` -> `groupId` so the renderer (which keys on groupId)
+      // routes post events correctly regardless of which field the gateway sent.
+      const body = parsed.body as Record<string, unknown> | undefined
+      if (body && body.chatId !== undefined && body.groupId === undefined) {
+        body.groupId = body.chatId
+      }
+
       for (const l of this.listeners) l(parsed)
     }
   }
@@ -308,11 +323,14 @@ export class RingCentralSocket implements RealtimeSubscription {
   // ── subscribe / keepalive ────────────────────────────────────────────────
 
   private sendSubscribe(): Promise<SubscriptionAck> {
+    // The modern WebSocket gateway infers the transport (it IS the websocket),
+    // so we must NOT send `deliveryMode: { transportType: 'WebSocket' }` — that
+    // triggers "Parameter [deliveryMode.transportType] value is invalid". Only
+    // event filters (and optional session recovery) belong here.
     const msg: SubscribeMessage = {
       message: {
         type: 'Subscribe',
         eventFilters: this.eventFilters,
-        deliveryMode: { transportType: 'WebSocket' },
         ...(this.sequenceId > 0
           ? { sessionRecovery: { sequenceId: this.sequenceId } }
           : {})

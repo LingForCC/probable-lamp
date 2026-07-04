@@ -72,7 +72,9 @@ describe('RingCentralSocket', () => {
       staleAfterMs: 999_999
     })
     await sock.start()
-    expect(createdUrl).toContain('wss://ws-api.ringcentral.com')
+    // The current gateway is the /ws path (the bare host no longer accepts
+    // connections).
+    expect(createdUrl).toContain('wss://ws-api.ringcentral.com/ws')
     expect(createdUrl).toContain('token=AT')
     await sock.stop()
   })
@@ -96,7 +98,9 @@ describe('RingCentralSocket', () => {
     const msg = JSON.parse(fake.sent[0])
     expect(msg.message.type).toBe('Subscribe')
     expect(msg.message.eventFilters).toContain('/restapi/v1.0/team-messaging/posts')
-    expect(msg.message.deliveryMode.transportType).toBe('WebSocket')
+    // The modern gateway infers the transport from the open socket, so we must
+    // NOT send deliveryMode (it is rejected as an invalid parameter).
+    expect(msg.message.deliveryMode).toBeUndefined()
     await sock.stop()
   })
 
@@ -134,6 +138,43 @@ describe('RingCentralSocket', () => {
 
     expect(received.map((r) => (r.body as { id: string }).id)).toEqual(['p1', 'p2'])
     expect(sock.currentSequenceId).toBe(43)
+    await sock.stop()
+  })
+
+  it('parses the production [metadata, notification] array format and normalizes chatId->groupId', async () => {
+    const clk = virtualClock()
+    const fake = new FakeSocket()
+    const sock = new RingCentralSocket({
+      getToken: () => 'AT',
+      createSocket: () => fake,
+      now: clk.now,
+      setTimeout: clk.schedule,
+      clearTimeout: () => {},
+      pingIntervalMs: 999_999,
+      staleAfterMs: 999_999
+    })
+    const received: RealtimeEnvelope[] = []
+    sock.onRealtime((env) => received.push(env))
+    await sock.start()
+    fake.open()
+
+    // Production delivers notifications as a 2-element array. The TM body uses
+    // `chatId`, which the handler must map onto `groupId` for the renderer.
+    fake.deliver(
+      JSON.stringify([
+        { some: 'metadata' },
+        {
+          event: '/restapi/v1.0/team-messaging/posts',
+          sequenceId: 5,
+          body: { eventType: 'PostAdded', id: 'p9', chatId: 'cX', text: 'hi', creatorId: 'u' }
+        }
+      ])
+    )
+
+    expect(received).toHaveLength(1)
+    const body = received[0].body as { id: string; groupId?: string; chatId?: string }
+    expect(body.id).toBe('p9')
+    expect(body.groupId).toBe('cX')
     await sock.stop()
   })
 

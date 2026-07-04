@@ -254,23 +254,34 @@ describe('RingCentralClient REST', () => {
     expect(env.requests[1].method).toBe('DELETE')
   })
 
-  it('searchPosts uses searchText query param', async () => {
+  it('searchPosts fans out per-chat (no global search endpoint) and merges hits', async () => {
     const env = authedClient()
-    env.enqueue('/team-messaging/v1/posts', {
+    // searchPosts first lists recent chats, then searches each per-chat.
+    env.enqueue('/team-messaging/v1/recent/chats', {
       status: 200,
-      json: { records: [{ id: 'x', text: 'needle' }] }
+      json: { records: [{ id: 'c1', type: 'Team', name: 'A' }, { id: 'c2', type: 'Team', name: 'B' }] }
+    })
+    env.enqueue('/team-messaging/v1/chats/c1/posts', {
+      status: 200,
+      json: { records: [{ id: 'x', chatId: 'c1', text: 'needle' }] }
+    })
+    env.enqueue('/team-messaging/v1/chats/c2/posts', {
+      status: 200,
+      json: { records: [{ id: 'y', chatId: 'c2', text: 'needle here' }] }
     })
     const res = await env.client.searchPosts('needle')
-    expect(res).toHaveLength(1)
-    expect(env.requests[0].url).toContain('searchText=needle')
+    expect(res).toHaveLength(2)
+    // `chatId` from the REST response is normalized onto `groupId`.
+    expect(res.map((p) => p.groupId).sort()).toEqual(['c1', 'c2'])
+    const searched = env.requests.map((r) => r.url).filter((u) => u.includes('searchText=needle'))
+    expect(searched).toHaveLength(2)
   })
 
-  it('markChatRead POSTs to /team-messaging/v1/chats/{id}/read', async () => {
+  it('markChatRead is a no-op on the wire (no working TM endpoint; local watermark is source of truth)', async () => {
     const env = authedClient()
-    env.enqueue('/team-messaging/v1/chats/c1/read', { status: 204, json: '' })
     await env.client.markChatRead('c1')
-    expect(env.requests[0].method).toBe('POST')
-    expect(env.requests[0].url).toContain('/team-messaging/v1/chats/c1/read')
+    // No HTTP request should be issued at all.
+    expect(env.requests).toHaveLength(0)
   })
 
   it('retries once on 429 then succeeds', async () => {

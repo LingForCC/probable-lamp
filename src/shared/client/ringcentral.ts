@@ -49,7 +49,14 @@ export const SERVER_URLS = {
 
 export type ServerEnv = keyof typeof SERVER_URLS
 
-export const WS_GATEWAY = 'wss://ws-api.ringcentral.com'
+/**
+ * RingCentral's WebSocket gateway.
+ *
+ * The bare `wss://ws-api.ringcentral.com` host no longer accepts connections;
+ * the current gateway is at the `/ws` path. See the WebSockets guide:
+ * https://developers.ringcentral.com/guide/notifications/websockets/quick-start
+ */
+export const WS_GATEWAY = 'wss://ws-api.ringcentral.com/ws'
 
 /** Injected fetch — matches the global fetch signature. */
 export type FetchLike = typeof fetch
@@ -146,6 +153,21 @@ function records<T>(body: unknown): T[] {
     if (Array.isArray(recs)) return recs as T[]
   }
   return []
+}
+
+/**
+ * Normalize a Team Messaging post onto the internal `GlipPost` shape.
+ *
+ * The TM REST endpoints return posts keyed by `chatId`, while the internal data
+ * model (and the realtime PostAdded event body) use `groupId`. Map `chatId`
+ * → `groupId` here so the renderer can route posts uniformly regardless of
+ * origin. This is the single boundary where the rename is reconciled.
+ */
+function normalizePost(post: GlipPost): GlipPost {
+  if ((post as GlipPost & { chatId?: string }).chatId && !post.groupId) {
+    return { ...post, groupId: (post as GlipPost & { chatId?: string }).chatId! }
+  }
+  return post
 }
 
 export class RingCentralClient implements IMessagingClient {
@@ -327,7 +349,10 @@ export class RingCentralClient implements IMessagingClient {
       `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`,
       { query: { recordCount: opts.recordCount ?? 50, pageToken: opts.pageToken } }
     )
-    return { records: records<GlipPost>(body), nextPageToken: parseNextPageToken(body) }
+    return {
+      records: records<GlipPost>(body).map(normalizePost),
+      nextPageToken: parseNextPageToken(body)
+    }
   }
 
   async sendPost(
@@ -335,17 +360,21 @@ export class RingCentralClient implements IMessagingClient {
     text: string,
     opts: { mentions?: GlipMention[]; attachments?: GlipAttachment[] } = {}
   ): Promise<GlipPost> {
-    return this.rest<GlipPost>('POST', `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`, {
-      body: { text, mentions: opts.mentions ?? [], attachments: opts.attachments ?? [] }
-    })
+    const post = await this.rest<GlipPost>(
+      'POST',
+      `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts`,
+      { body: { text, mentions: opts.mentions ?? [], attachments: opts.attachments ?? [] } }
+    )
+    return normalizePost(post)
   }
 
   async editPost(chatId: string, postId: string, text: string): Promise<GlipPost> {
-    return this.rest<GlipPost>(
+    const post = await this.rest<GlipPost>(
       'PUT',
       `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/posts/${encodeURIComponent(postId)}`,
       { body: { text } }
     )
+    return normalizePost(post)
   }
 
   async deletePost(chatId: string, postId: string): Promise<void> {
@@ -377,15 +406,47 @@ export class RingCentralClient implements IMessagingClient {
     return (await res.json()) as GlipAttachment
   }
 
+  /**
+   * Search posts across chats.
+   *
+   * RingCentral's Team Messaging API has no global post-search endpoint: the
+   * legacy `/restapi/v1.0/glip/posts` and the mythical `/team-messaging/v1/posts`
+   * both 404. The only working search is per-chat:
+   *   GET /team-messaging/v1/chats/{chatId}/posts?searchText=
+   * We therefore fan out across the user's recent chats and merge the hits.
+   * Capped to keep latency bounded; best-effort — a failing chat is skipped.
+   */
   async searchPosts(text: string): Promise<GlipPost[]> {
-    const body = await this.rest<unknown>('GET', '/team-messaging/v1/posts', {
-      query: { searchText: text, recordCount: 50 }
-    })
-    return records<GlipPost>(body)
+    const q = text.trim()
+    if (!q) return []
+    const recent = await this.listRecentChats()
+    const cap = Math.min(recent.records.length, 25) // bound the fan-out
+    const searches = recent.records.slice(0, cap).map((c) =>
+      this.rest<unknown>(
+        'GET',
+        `/team-messaging/v1/chats/${encodeURIComponent(c.id)}/posts`,
+        { query: { searchText: q, recordCount: 25 } }
+      )
+        .then((body) => records<GlipPost>(body).map((p) => normalizePost(p)))
+        .catch(() => [] as GlipPost[])
+    )
+    const buckets = await Promise.all(searches)
+    return buckets.flat().slice(0, 50)
   }
 
-  async markChatRead(chatId: string): Promise<void> {
-    await this.rest<void>('POST', `/team-messaging/v1/chats/${encodeURIComponent(chatId)}/read`)
+  /**
+   * Mark a chat as read on the server.
+   *
+   * No working Team Messaging endpoint exists for this: every candidate path
+   * (`/team-messaging/v1/chats/{id}/read`, the `/glip/chats/{id}/read` form,
+   * PATCH the chat, etc.) returns AGW-404 against the TM chat-id space (the glip
+   * endpoint exists but uses a separate, incompatible chat-id namespace). Since
+   * unread state is tracked locally via persisted read-state watermarks (the
+   * single source of truth for the UI), this is a no-op on the wire. Kept in the
+   * interface so the mock/IPC layers stay uniform.
+   */
+  async markChatRead(_chatId: string): Promise<void> {
+    /* no-op: see comment above */
   }
 
   async setTyping(chatId: string): Promise<void> {
