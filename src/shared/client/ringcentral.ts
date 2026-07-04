@@ -407,34 +407,6 @@ export class RingCentralClient implements IMessagingClient {
   }
 
   /**
-   * Search posts across chats.
-   *
-   * RingCentral's Team Messaging API has no global post-search endpoint: the
-   * legacy `/restapi/v1.0/glip/posts` and the mythical `/team-messaging/v1/posts`
-   * both 404. The only working search is per-chat:
-   *   GET /team-messaging/v1/chats/{chatId}/posts?searchText=
-   * We therefore fan out across the user's recent chats and merge the hits.
-   * Capped to keep latency bounded; best-effort — a failing chat is skipped.
-   */
-  async searchPosts(text: string): Promise<GlipPost[]> {
-    const q = text.trim()
-    if (!q) return []
-    const recent = await this.listRecentChats()
-    const cap = Math.min(recent.records.length, 25) // bound the fan-out
-    const searches = recent.records.slice(0, cap).map((c) =>
-      this.rest<unknown>(
-        'GET',
-        `/team-messaging/v1/chats/${encodeURIComponent(c.id)}/posts`,
-        { query: { searchText: q, recordCount: 25 } }
-      )
-        .then((body) => records<GlipPost>(body).map((p) => normalizePost(p)))
-        .catch(() => [] as GlipPost[])
-    )
-    const buckets = await Promise.all(searches)
-    return buckets.flat().slice(0, 50)
-  }
-
-  /**
    * Mark a chat as read on the server.
    *
    * No working Team Messaging endpoint exists for this: every candidate path

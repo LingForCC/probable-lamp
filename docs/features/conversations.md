@@ -121,14 +121,9 @@ click chat row ─► store.selectChat(api, chatId)                      (appSto
 
 ## Search / filter
 
-The search input does double duty:
-
-1. **Client-side filter**: as you type, the row list is filtered by `chatName`
-   (case-insensitive substring). Clearing the input restores the full list.
-2. **Server-side message search**: typing also calls `runSearch` which runs
-   `client.searchPosts(query)` and, if there are hits, shows a compact "Message
-   results" dropdown; clicking a result jumps to that post's chat
-   (see [search.md](search.md)).
+The search input filters the row list by `chatName` (case-insensitive substring).
+Clearing the input restores the full list. This is purely client-side and never
+calls the API (see [search.md](search.md)).
 
 ## Realtime updates to the sidebar
 
@@ -152,7 +147,7 @@ reconcile path.
 
 - `src/renderer/components/Sidebar.tsx` — list, filter, unread badges, search box.
 - `src/renderer/store/appStore.ts` — `selectChat`, `refreshChats`, `reconcileUnread`,
-  `runSearch`, `seedReadStatesAndUnread`, `reconcileUnreadForAll`, realtime chat-row
+  `seedReadStatesAndUnread`, `reconcileUnreadForAll`, realtime chat-row
   updates.
 - `src/renderer/main.tsx` — subscribes to `onRealtimeReconciled` → `reconcileUnread`.
 - `src/main/store.ts` — `getReadStates` / `setReadState` (persisted watermarks).

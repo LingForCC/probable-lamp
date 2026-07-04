@@ -43,7 +43,6 @@ const api: RcmApi = {
   editPost: (args) => invoke(IPC.EDIT_POST, args),
   deletePost: (args) => invoke(IPC.DELETE_POST, args),
   uploadFile: (args) => invoke(IPC.UPLOAD_FILE, args),
-  searchPosts: (text) => invoke(IPC.SEARCH_POSTS, text),
   markChatRead: (chatId) => invoke(IPC.MARK_CHAT_READ, chatId),
   setTyping: (chatId) => invoke(IPC.SET_TYPING, chatId),
   openExternal: (url) => invoke(IPC.OPEN_EXTERNAL, url),

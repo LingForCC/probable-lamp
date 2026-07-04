@@ -29,7 +29,7 @@ network**, then drop in a RingCentral JWT to use it against the live API.
   desktop notifications.
 - **Teams**: list and create teams.
 - **Attachments**: file upload via `POST /team-messaging/v1/files` (rendered as chips/cards).
-- **Search** across messages.
+- **Search/filter**: filter the conversation list by chat name (client-side).
 - **Settings**: light/dark/system theme, sandbox/production server, MOCK toggle,
   log out.
 - **Client-side rate limiting** (token bucket) honoring RingCentral's buckets
@@ -141,7 +141,7 @@ tests/
 - **E2E (3 tests):** drive the packaged Electron app in MOCK mode through the
   full flow — login → browse chats → open a chat → send → receive a simulated
   realtime reply → edit → delete → theme toggle → logout — plus creating a team
-  and search/filter.
+  and chat-list filtering.
 
 Run everything:
 

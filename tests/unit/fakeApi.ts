@@ -171,10 +171,6 @@ export function createFakeApi(opts: {
       record('uploadFile', [args])
       return { type: 'File', id: nextId('file'), name: args.name }
     },
-    searchPosts: async (text: string): Promise<GlipPost[]> => {
-      record('searchPosts', [text])
-      return []
-    },
     markChatRead: async (chatId: string): Promise<void> => {
       record('markChatRead', [chatId])
     },

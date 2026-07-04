@@ -332,17 +332,6 @@ export class MockMessagingClient implements IMessagingClient, RealtimeSubscripti
     }
   }
 
-  async searchPosts(text: string): Promise<GlipPost[]> {
-    const q = text.toLowerCase()
-    const out: GlipPost[] = []
-    for (const list of this.state.posts.values()) {
-      for (const p of list) {
-        if (p.text.toLowerCase().includes(q)) out.push(this.enrich(p))
-      }
-    }
-    return out
-  }
-
   async markChatRead(chatId: string): Promise<void> {
     // Unread tracking is a renderer-side concern (watermark-based); the mock
     // only needs to acknowledge the read. The IPC layer persists the watermark.

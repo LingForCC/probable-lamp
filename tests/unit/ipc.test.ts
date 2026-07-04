@@ -60,7 +60,6 @@ function makeClient(overrides: Partial<IMessagingClient> = {}): IMessagingClient
     editPost: async () => ({ id: 'p', groupId: 'c', creatorId: 'me', text: '', creationTime: '' }),
     deletePost: async () => {},
     uploadFile: async () => ({ type: 'File', id: 'f', name: 'n' }),
-    searchPosts: async () => [],
     markChatRead: async () => {},
     setTyping: async () => {},
     ...overrides

@@ -24,7 +24,6 @@ function freshStore() {
     typing: {},
     unread: {},
     readStates: {},
-    search: null,
     loadingChats: false,
     error: null
   })

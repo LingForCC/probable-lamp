@@ -168,7 +168,6 @@ export const IPC = {
   EDIT_POST: 'rc:edit-post',
   DELETE_POST: 'rc:delete-post',
   UPLOAD_FILE: 'rc:upload-file',
-  SEARCH_POSTS: 'rc:search-posts',
   MARK_CHAT_READ: 'rc:mark-chat-read',
   SET_TYPING: 'rc:set-typing',
   OPEN_EXTERNAL: 'shell:open-external',
@@ -225,7 +224,6 @@ export interface IMessagingClient {
   editPost(chatId: string, postId: string, text: string): Promise<GlipPost>
   deletePost(chatId: string, postId: string): Promise<void>
   uploadFile(chatId: string, file: { name: string; type: string; data: Uint8Array }): Promise<GlipAttachment>
-  searchPosts(text: string): Promise<GlipPost[]>
   markChatRead(chatId: string): Promise<void>
   setTyping(chatId: string): Promise<void>
 }

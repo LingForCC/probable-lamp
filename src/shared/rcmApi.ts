@@ -76,7 +76,6 @@ export interface RcmApi {
     type: string
     data: number[]
   }) => Promise<GlipAttachment>
-  searchPosts: (text: string) => Promise<GlipPost[]>
   markChatRead: (chatId: string) => Promise<void>
   setTyping: (chatId: string) => Promise<void>
   openExternal: (url: string) => Promise<boolean>

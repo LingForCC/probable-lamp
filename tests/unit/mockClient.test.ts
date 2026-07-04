@@ -70,13 +70,6 @@ describe('MockMessagingClient', () => {
     expect(posts.records.find((p) => p.id === sent.id)).toBeUndefined()
   })
 
-  it('searchPosts matches text case-insensitively', async () => {
-    const c = new MockMessagingClient({ autoReplyMs: 0 })
-    const results = await c.searchPosts('tacos')
-    expect(results.length).toBeGreaterThan(0)
-    for (const r of results) expect(r.text.toLowerCase()).toContain('tacos')
-  })
-
   it('createTeam adds a new team to the list', async () => {
     const c = new MockMessagingClient({ autoReplyMs: 0 })
     const before = (await c.listTeams()).length

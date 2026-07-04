@@ -53,7 +53,6 @@ export interface AppState {
    * iff `creationTime > watermark` and it isn't the user's own.
    */
   readStates: Record<string, string>
-  search: { query: string; results: GlipPost[]; loading: boolean } | null
   loadingChats: boolean
   error: string | null
 
@@ -83,7 +82,6 @@ export interface AppState {
    * local state; on `error` it surfaces the message so the user can retry.
    */
   applyAuthState: (api: RcmApi, state: AuthState) => Promise<void>
-  runSearch: (api: RcmApi, query: string) => Promise<void>
   setTheme: (api: RcmApi, theme: 'light' | 'dark' | 'system') => Promise<void>
   setError: (msg: string | null) => void
 }
@@ -110,7 +108,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   typing: {},
   unread: {},
   readStates: {},
-  search: null,
   loadingChats: false,
   error: null,
 
@@ -488,20 +485,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       // authenticating | error
       set({ auth: state })
-    }
-  },
-
-  async runSearch(api, query) {
-    if (!query.trim()) {
-      set({ search: null })
-      return
-    }
-    set({ search: { query, results: [], loading: true } })
-    try {
-      const results = await api.searchPosts(query)
-      set({ search: { query, results, loading: false } })
-    } catch (e) {
-      set({ search: { query, results: [], loading: false }, error: errMsg(e) })
     }
   },
 

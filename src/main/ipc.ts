@@ -181,7 +181,6 @@ export class IpcController {
           data: new Uint8Array(args.data)
         })
     )
-    ipcMain.handle(IPC.SEARCH_POSTS, (_e, text: string) => client.searchPosts(text))
     ipcMain.handle(IPC.MARK_CHAT_READ, async (_e, chatId: string) => {
       // Tell the server the chat was read, AND persist the local read-state
       // watermark so the next cold start computes unread from "now".

@@ -16,8 +16,6 @@ export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
   const unread = useAppStore((s) => s.unread)
   const selectChat = useAppStore((s) => s.selectChat)
   const activeChatId = useAppStore((s) => s.activeChatId)
-  const runSearch = useAppStore((s) => s.runSearch)
-  const search = useAppStore((s) => s.search)
   const [filter, setFilter] = useState('')
 
   const filtered = useMemo(() => {
@@ -59,28 +57,10 @@ export function Sidebar({ onOpenSettings, onNewTeam }: SidebarProps) {
         <input
           data-testid="search-input"
           value={filter}
-          onChange={(e) => {
-            setFilter(e.target.value)
-            void runSearch(getRcm(), e.target.value)
-          }}
-          placeholder="Search chats or messages"
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Search chats"
           className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none"
         />
-        {search && search.results.length > 0 && (
-          <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-slate-700 bg-slate-800 text-xs">
-            <p className="px-3 py-1 text-slate-400">Message results</p>
-            {search.results.slice(0, 8).map((r) => (
-              <button
-                key={r.id}
-                data-testid={`search-result-${r.id}`}
-                onClick={() => void selectChat(getRcm(), r.groupId)}
-                className="block w-full truncate px-3 py-1.5 text-left hover:bg-slate-700"
-              >
-                {r.text}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* chat list */}
