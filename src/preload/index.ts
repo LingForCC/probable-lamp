@@ -31,6 +31,7 @@ const api: RcmApi = {
   getAuthState: () => invoke(IPC.GET_AUTH_STATE),
   getMe: () => invoke(IPC.GET_ME),
   getReadStates: () => invoke(IPC.GET_READ_STATES),
+  getFirstStartedAt: () => invoke(IPC.GET_FIRST_STARTED_AT),
   getCachedMe: () => invoke(IPC.GET_CACHED_ME),
   getCachedChats: () => invoke(IPC.GET_CACHED_CHATS),
   getCachedPosts: (chatId) => invoke(IPC.GET_CACHED_POSTS, chatId),

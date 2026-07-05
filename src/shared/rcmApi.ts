@@ -32,6 +32,13 @@ export interface RcmApi {
    */
   getReadStates: () => Promise<Record<string, string>>
   /**
+   * ISO timestamp of the first time the app launched with an empty read-state
+   * map. Used as the seed watermark on first start so a chat is unread only if
+   * it has activity newer than when the user first opened the app. Null until
+   * the first start is recorded at boot.
+   */
+  getFirstStartedAt: () => Promise<string | null>
+  /**
    * Cached current user from disk (null if the cache is empty/cold). Used to
    * render the sidebar instantly on cold start before the network resolves.
    */

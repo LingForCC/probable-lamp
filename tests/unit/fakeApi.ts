@@ -25,6 +25,11 @@ export function createFakeApi(opts: {
   /** Injected read-state watermarks (chatId -> ISO). Defaults to empty. */
   readStates?: Record<string, string>
   /**
+   * Persisted first-launch timestamp used to seed watermarks on first start.
+   * Defaults to null (matches a real first start before the boot record lands).
+   */
+  firstStartedAt?: string | null
+  /**
    * Offline cache contents. When provided, `init`/`doLogin`/`applyAuthState`
    * seed the sidebar from these before hitting the network, and `selectChat`
    * renders cached posts instantly. Defaults to empty (cold cache).
@@ -83,6 +88,10 @@ export function createFakeApi(opts: {
     getReadStates: async (): Promise<Record<string, string>> => {
       record('getReadStates', [])
       return { ...(opts.readStates ?? {}) }
+    },
+    getFirstStartedAt: async (): Promise<string | null> => {
+      record('getFirstStartedAt', [])
+      return opts.firstStartedAt === undefined ? null : opts.firstStartedAt
     },
     getCachedMe: async (): Promise<GlipPerson | null> => {
       record('getCachedMe', [])

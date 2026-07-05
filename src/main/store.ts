@@ -26,12 +26,22 @@ export interface PersistedState {
    * message previews already shown in the sidebar. Drives local unread counts.
    */
   readStates: Record<string, string>
+  /**
+   * Wall-clock ISO timestamp of the very first time the app launched with an
+   * empty read-state map. Used to seed per-chat watermarks on first start so a
+   * chat is considered unread only if its `lastModifiedTime` is *after* the
+   * user first installed/opened the app — i.e. genuinely new activity, rather
+   * than treating years of history as unread (or, before this field, as read).
+   * Set once and never overwritten.
+   */
+  firstStartedAt: string | null
 }
 
 const DEFAULT_STATE: PersistedState = {
   settings: { theme: 'system', server: 'sandbox', apiMode: 'mock' },
   encryptedTokens: null,
-  readStates: {}
+  readStates: {},
+  firstStartedAt: null
 }
 
 export class AppStore {
@@ -109,6 +119,26 @@ export class AppStore {
   /** Persist/overwrite a single chat's read-state watermark. */
   setReadState(chatId: string, isoTime: string): void {
     this.store.set(`readStates.${chatId}`, isoTime)
+  }
+
+  /**
+   * Timestamp of the first launch with an empty read-state map (null until the
+   * first start is recorded via {@link markFirstStart}). Stable thereafter.
+   */
+  getFirstStartedAt(): string | null {
+    return this.store.get('firstStartedAt', DEFAULT_STATE.firstStartedAt)
+  }
+
+  /**
+   * Record the first-launch timestamp, but only if it hasn't already been set.
+   * Returns the effective (post-call) value so the caller can use it without a
+   * second read. Idempotent across boots and concurrent callers.
+   */
+  markFirstStart(isoTime: string = new Date().toISOString()): string {
+    const existing = this.store.get('firstStartedAt', null)
+    if (existing) return existing
+    this.store.set('firstStartedAt', isoTime)
+    return isoTime
   }
 
   /** Merge persisted settings with a runtime config (env-derived). */

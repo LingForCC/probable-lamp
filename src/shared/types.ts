@@ -154,6 +154,8 @@ export const IPC = {
   GET_AUTH_STATE: 'auth:get-state',
   GET_ME: 'rc:get-me',
   GET_READ_STATES: 'app:get-read-states',
+  /** First-launch timestamp used to seed read-state watermarks on first start. */
+  GET_FIRST_STARTED_AT: 'app:get-first-started-at',
   // Offline history cache (read-back). Write-through happens on the data
   // handlers below + realtime forwarding; these channels only serve cache hits.
   GET_CACHED_ME: 'rc:get-cached-me',

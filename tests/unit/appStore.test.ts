@@ -269,21 +269,49 @@ describe('appStore unread reconciliation (local watermark)', () => {
     expect(useAppStore.getState().unread['c2']).toBe(2) // theirs1 + theirs2, mine excluded
   })
 
-  it('first-ever start (no persisted watermark) seeds read up to lastModifiedTime → 0 unread', async () => {
-    const posts: GlipPost[] = [
-      { id: 'p1', groupId: 'c2', text: 'hi', creatorId: 'u1', creationTime: '2024-01-01T00:00:00Z' }
-    ]
+  it('first-ever start seeds watermarks to firstStartedAt, not lastModifiedTime', async () => {
+    // Regression for the "no unread on first start" bug: previously each chat's
+    // watermark was seeded to its own lastModifiedTime, so the reconcile filter
+    // (lastModifiedTime > watermark) never matched anything. With firstStartedAt,
+    // the watermark is the install moment; activity before it stays read.
+    const firstStartedAt = '2024-01-01T00:00:00Z'
     const api = createFakeApi({
-      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-01T00:00:00Z' }],
+      chats: [
+        { id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2023-06-01T00:00:00Z' }
+      ],
       me,
-      posts: { c2: posts }
+      posts: {
+        c2: [{ id: 'p1', groupId: 'c2', text: 'old history', creatorId: 'u1', creationTime: '2023-06-01T00:00:00Z' }]
+      },
+      firstStartedAt
       // no readStates → first start
     })
     await useAppStore.getState().doLogin(api)
     await Promise.resolve()
+    await Promise.resolve()
+    // All history predates firstStartedAt → 0 unread, and the watermark is the
+    // install moment (NOT the chat's lastModifiedTime).
     expect(useAppStore.getState().unread['c2'] ?? 0).toBe(0)
-    // watermark seeded to lastModifiedTime so history isn't unread
-    expect(useAppStore.getState().readStates['c2']).toBe('2024-01-01T00:00:00Z')
+    expect(useAppStore.getState().readStates['c2']).toBe(firstStartedAt)
+  })
+
+  it('first-ever start: chat with activity AFTER firstStartedAt reconciles as unread', async () => {
+    // The fix: a teammate posts after the user installed → it must badge.
+    const firstStartedAt = '2024-01-01T00:00:00Z'
+    const posts: GlipPost[] = [
+      { id: 'old', groupId: 'c2', text: 'old', creatorId: 'u1', creationTime: '2023-12-31T00:00:00Z' },
+      { id: 'new', groupId: 'c2', text: 'after install', creatorId: 'u1', creationTime: '2024-01-02T00:00:00Z' }
+    ]
+    const api = createFakeApi({
+      chats: [{ id: 'c2', type: 'Team', name: 'Eng', lastModifiedTime: '2024-01-02T00:00:00Z' }],
+      me,
+      posts: { c2: posts },
+      firstStartedAt
+    })
+    await useAppStore.getState().doLogin(api)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(useAppStore.getState().unread['c2']).toBe(1) // the post after install
   })
 
   it('selectChat clears unread and advances the watermark', async () => {

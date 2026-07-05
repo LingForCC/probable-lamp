@@ -82,3 +82,35 @@ describe('AppStore read-state persistence', () => {
     }
   })
 })
+
+describe('AppStore firstStartedAt', () => {
+  it('is null until markFirstStart is called', () => {
+    const store = new AppStore(dir)
+    expect(store.getFirstStartedAt()).toBeNull()
+  })
+
+  it('markFirstStart records and returns the timestamp', () => {
+    const store = new AppStore(dir)
+    const ts = store.markFirstStart('2024-01-01T00:00:00Z')
+    expect(ts).toBe('2024-01-01T00:00:00Z')
+    expect(store.getFirstStartedAt()).toBe('2024-01-01T00:00:00Z')
+  })
+
+  it('markFirstStart is idempotent: a second call returns the original value', () => {
+    const store = new AppStore(dir)
+    store.markFirstStart('2024-01-01T00:00:00Z')
+    // A later boot tries to record "now"; the first value must win.
+    const second = store.markFirstStart('2025-06-01T12:00:00Z')
+    expect(second).toBe('2024-01-01T00:00:00Z')
+    expect(store.getFirstStartedAt()).toBe('2024-01-01T00:00:00Z')
+  })
+
+  it('survives a restart (new instance reads the same recorded value)', () => {
+    const store = new AppStore(dir)
+    store.markFirstStart('2024-01-01T00:00:00Z')
+    const restarted = new AppStore(dir)
+    expect(restarted.getFirstStartedAt()).toBe('2024-01-01T00:00:00Z')
+    // And re-marking on the restarted instance is a no-op.
+    expect(restarted.markFirstStart('2030-01-01T00:00:00Z')).toBe('2024-01-01T00:00:00Z')
+  })
+})

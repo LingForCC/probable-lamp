@@ -31,6 +31,11 @@ const windows = new Set<BrowserWindow>()
 app.whenReady().then(async () => {
   const env = loadConfig()
   const store = new AppStore()
+  // Record the first-launch timestamp as early as possible. This is the seed
+  // watermark for chats on a first-ever start (when there are no per-chat
+  // read-states yet), so a chat is considered unread only if it has activity
+  // newer than this moment. Idempotent: no-op on subsequent launches.
+  store.markFirstStart()
   const resolvedConfig = store.resolveConfig({
     server: env.server,
     apiMode: env.apiMode,

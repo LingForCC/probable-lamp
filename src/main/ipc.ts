@@ -100,6 +100,9 @@ export class IpcController {
 
     ipcMain.handle(IPC.GET_READ_STATES, () => store.getReadStates())
 
+    // First-launch timestamp: the seed watermark for chats on a brand-new install.
+    ipcMain.handle(IPC.GET_FIRST_STARTED_AT, () => store.getFirstStartedAt())
+
     // Offline history cache reads (return empty/null when cold or corrupt).
     ipcMain.handle(IPC.GET_CACHED_ME, () => cache.readIndex()?.me ?? null)
     ipcMain.handle(IPC.GET_CACHED_CHATS, () => cache.readIndex()?.chats ?? [])

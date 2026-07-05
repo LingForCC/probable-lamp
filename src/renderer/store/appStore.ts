@@ -549,12 +549,15 @@ async function seedFromCache(
   try {
     const [cachedMe, cachedChats] = await Promise.all([api.getCachedMe(), api.getCachedChats()])
     if (!cachedChats.length) return
-    const readStates = await api.getReadStates()
+    const [readStates, firstStartedAt] = await Promise.all([
+      api.getReadStates(),
+      api.getFirstStartedAt()
+    ])
     set({
       me: cachedMe,
       chats: cachedChats,
       people: collectPeople(cachedChats),
-      ...seedReadStatesAndUnread(cachedChats, readStates, apiMode)
+      ...seedReadStatesAndUnread(cachedChats, readStates, apiMode, firstStartedAt)
     })
   } catch {
     // cache read failed → fall back to the network path
@@ -575,13 +578,16 @@ async function loadChatsMeAndReconcile(
   apiMode: 'mock' | 'real' | undefined
 ): Promise<void> {
   const [me, chatsResp] = await Promise.all([api.getMe(), api.listRecentChats()])
-  const readStates = await api.getReadStates()
+  const [readStates, firstStartedAt] = await Promise.all([
+    api.getReadStates(),
+    api.getFirstStartedAt()
+  ])
   set({
     auth,
     me,
     chats: chatsResp.records,
     people: collectPeople(chatsResp.records),
-    ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode)
+    ...seedReadStatesAndUnread(chatsResp.records, readStates, apiMode, firstStartedAt)
   })
   // Reconcile unread for chats with activity since the persisted watermark.
   void reconcileUnreadForAll(api, chatsResp.records, get, set)
@@ -636,18 +642,26 @@ async function refreshChatFromNetwork(
 
 /**
  * Build the initial `readStates` + `unread` slices from the persisted watermarks
- * and the freshly-loaded chat list. Two cases:
+ * and the freshly-loaded chat list. Three cases:
  *
- *  - First-ever start (empty persisted map): seed each chat's watermark to its
- *    `lastModifiedTime` so years of history isn't shown as unread. In MOCK mode
- *    we instead seed demo watermarks so the seeded chats show unread badges.
- *  - Returning user: keep persisted watermarks; default any new chat to "read
- *    up to its lastModifiedTime".
+ *  - First-ever start (empty persisted map): seed each chat's watermark to
+ *    `firstStartedAt` (the moment the app was first opened) rather than its own
+ *    `lastModifiedTime`. Seeding to `lastModifiedTime` made every chat's
+ *    watermark equal its last activity, so the reconcile filter
+ *    (`lastModifiedTime > watermark`) never matched anything — no unread badge
+ *    could ever appear on cold start. With `firstStartedAt`, a chat becomes a
+ *    reconcile candidate (and gets counted) only if it has activity *after* the
+ *    user first installed/opened the app. In MOCK mode we instead seed demo
+ *    watermarks so the seeded chats show unread badges.
+ *  - Returning user: keep persisted watermarks; default any brand-new chat
+ *    discovered this session to "read up to firstStartedAt" (or, if unknown,
+ *    its `lastModifiedTime`).
  */
 function seedReadStatesAndUnread(
   chats: GlipChat[],
   persisted: Record<string, string>,
-  apiMode: 'mock' | 'real' | undefined
+  apiMode: 'mock' | 'real' | undefined,
+  firstStartedAt: string | null
 ): Pick<AppState, 'readStates' | 'unread'> {
   const isFirstStart = Object.keys(persisted).length === 0
   const readStates: Record<string, string> = { ...persisted }
@@ -659,11 +673,25 @@ function seedReadStatesAndUnread(
     seedMockDemoReadStates(readStates)
   }
 
+  // First-start seed watermark for any chat without a persisted entry. In real
+  // mode this is firstStartedAt (so genuinely-new post-install activity counts
+  // as unread); MOCK mode overrides this per-chat above. Fall back to now if the
+  // boot recording somehow hasn't landed yet.
+  const firstStartWatermark = firstStartedAt ?? new Date().toISOString()
+
   for (const c of chats) {
     if (!(c.id in readStates)) {
-      // First-ever start (real mode) OR a brand-new chat discovered this session:
-      // treat everything up to its current last activity as read.
-      readStates[c.id] = c.lastModifiedTime ?? new Date().toISOString()
+      if (isFirstStart && apiMode === 'mock') {
+        // demo watermarks already seeded above; nothing to add per-chat
+      } else if (isFirstStart) {
+        // First-ever start (real mode): unread begins from the install moment.
+        readStates[c.id] = firstStartWatermark
+      } else {
+        // Returning user, brand-new chat discovered this session: treat activity
+        // up to firstStartedAt as read (don't suddenly badge a newly-joined
+        // team's entire history as unread).
+        readStates[c.id] = firstStartedAt ?? c.lastModifiedTime ?? new Date().toISOString()
+      }
     }
     unread[c.id] = 0
   }
